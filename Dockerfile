@@ -5,4 +5,4 @@ ADD . .
 RUN pip install -e .
 #ENV HOST="0.0.0.0"
 #ENV PORT=8000
-CMD ["app.app.handler"]
+CMD ["server.handler"]

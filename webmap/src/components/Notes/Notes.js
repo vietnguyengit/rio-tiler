@@ -14,7 +14,7 @@ export function AlertDismissible() {
               Just a simple POC to justify whether IMOS SST can be visualised on a webmap like Leaflet using Rio-tiler XarrayReader feature.
             </li>
             <li>
-              Consider tile caching strategies if this ever go to production.
+              Consider tile caching strategies.
             </li>
           </ul>
         </div>
