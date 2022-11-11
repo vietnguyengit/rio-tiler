@@ -37,7 +37,7 @@ services:
       ZARR_STORE: s3://imos-data-lab-optimised/4428/dummy_sst/backup/
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tiles`)) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && Path(`/hello`)) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tilejson.json`))"
+      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tiles`)) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && Path(`/hello`)) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tilejson.json`)) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/time_range`))"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
       - "traefik.http.routers.backend.entrypoints=web"
     build:
