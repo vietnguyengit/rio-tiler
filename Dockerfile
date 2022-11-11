@@ -4,5 +4,6 @@ RUN pip install rasterio fastapi[all] uvicorn mangum pandas xarray[complete] num
 ADD . .
 RUN pip install -e .
 ENV HOST="0.0.0.0"
-ENV PORT=80
-ENTRYPOINT uvicorn app.app:app --host ${HOST} --port ${PORT}
+ENV PORT=8000
+
+ENTRYPOINT uvicorn app.app:app --host ${HOST} --port ${PORT} --reload

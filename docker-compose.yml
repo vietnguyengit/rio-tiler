@@ -1,0 +1,41 @@
+services:
+  loadbalancer:
+    image: traefik:latest
+    command:
+      #- "--log.level=DEBUG"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8081:8081"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+
+  webmap:
+    image: webmap
+    build:
+      context: ./webmap
+    depends_on:
+      - loadbalancer
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.webmap.rule=Host(`localhost`) || Host(`ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com`)"
+      - "traefik.http.services.webmap.loadbalancer.server.port=3000"
+      - "traefik.http.routers.webmap.entrypoints=web"
+
+  backend:
+    image: rio-tiler
+    depends_on:
+      - loadbalancer
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || Host(`rio.ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com`)"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+      - "traefik.http.routers.backend.entrypoints=web"
+    build:
+      context: ./
+    restart: unless-stopped

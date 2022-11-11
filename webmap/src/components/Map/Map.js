@@ -16,7 +16,7 @@ class Map extends Component {
           />
           <LayerGroup>
             <TileLayer
-              url="http://127.0.0.1:8000/tiles/{z}/{x}/{y}?url=s3%3A%2F%2Fimos-data-pixeldrill%2Fvhnguyen%2Fplayground%2Fmulti-years&variable=sea_surface_temperature&idx=7000"
+              url="http://rio.localhost/tiles/{z}/{x}/{y}?url=s3%3A%2F%2Fimos-data-pixeldrill%2Fvhnguyen%2Fplayground%2Fmulti-years&variable=sea_surface_temperature&idx=7000"
             />
           </LayerGroup>
         </MapContainer>
