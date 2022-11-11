@@ -106,31 +106,16 @@ def get_time_range(
         "max_time": np_dt64_to_dt(ds.time.values[-1])})
     return Response(res, media_type="application/json")
 
-color_list = [
-    '#ffffff00',  # transparent
-    '#724C01',
-    '#CEA712',
-    '#FFA904',
-    '#FDFE00',
-    '#E6EC06',
-    '#BACF00',
-    '#8BB001',
-    '#72A002',
-    '#5B8D03',
-    '#448102',
-    '#2C7001',
-    '#176100'
-]
 
-imos = matplotlib.colors.LinearSegmentedColormap.from_list(
-    'imos', color_list,
-    256,
-)
-x = np.linspace(0, 1, 256)
-cmap_vals = imos(x)[:, :]
-cmap_uint8 = (cmap_vals * 255).astype('uint8')
-imos_dict = {idx: tuple(value) for idx, value in enumerate(cmap_uint8)}
-cmap = cmap.register({"imos": imos_dict})
+cmap_names = ['plasma', 'viridis', 'cividis']
+for name in cmap_names:
+    cm = cmap.get(name)
+    values = list(cm.values())
+    values.pop(0)
+    values.insert(0, (255, 255, 255, 0))  # replace the first color with transparent
+    dict_val = {idx: tuple(value) for idx, value in enumerate(values)}
+    cmap = cmap.register({"imos_"+name: dict(dict_val)})
+
 
 @app.get("/tiles/{z}/{x}/{y}", response_class=Response)
 def tile(
@@ -138,8 +123,10 @@ def tile(
         x: int,
         y: int,
         variable: str = Query(description="Zarr Variable"),
-        idx: int = Query(description="Time index")
+        idx: int = Query(description="Time index"),
+        cmap_name: str = Query(description="CMAP name")
 ):
+    cm = cmap.get(cmap_name)
     # with xarray.open_dataset(url, engine="zarr", decode_coords="all") as src:
     da = ds[variable][[idx]]
     # Make sure we are a CRS
@@ -150,9 +137,8 @@ def tile(
             in_range=((260, 320),),
             out_range=((0, 255),)
         )
-    cm = cmap.get('imos')
-    content = img.render(colormap=cm)
-    return Response(content, media_type="image/png")
+        content = img.render(colormap=cm)
+        return Response(content, media_type="image/png")
 
 
 @app.get(
