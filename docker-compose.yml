@@ -1,3 +1,5 @@
+version: "3.3"
+
 services:
   loadbalancer:
     image: traefik:latest
@@ -33,7 +35,9 @@ services:
       - .env
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || Host(`rio.ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com`)"
+      - "traefik.http.routers.backend.rule=Host(`rio.localhost`)"
+      - "traefik.http.middlewares.backend.headers.accesscontrolalloworiginlist=http://rio.localhost,http://ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com"
+      - "traefik.http.middlewares.backend.headers.addvaryheader=true"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
       - "traefik.http.routers.backend.entrypoints=web"
     build:
