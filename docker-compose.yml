@@ -35,7 +35,7 @@ services:
       - .env
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || Host(`ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com`)"
+      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || Host(`backend.ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com`)"
       - "traefik.http.middlewares.backend.headers.accesscontrolallowmethods=GET,OPTIONS,PUT"
       - "traefik.http.middlewares.backend.headers.accesscontrolalloworiginlist=http://ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com"
       - "traefik.http.middlewares.backend.headers.accesscontrolmaxage=100"
