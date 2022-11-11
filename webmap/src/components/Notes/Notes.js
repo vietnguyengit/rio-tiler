@@ -11,7 +11,7 @@ export function AlertDismissible() {
         <div>
           <ul>
             <li>
-              Just a simple POC to justify whether IMOS SST can be visualised on a webmap like Leaflet using Rio-tiler XarrayReader feature.
+              A POC to justify whether IMOS SST can be visualised on a webmap like Leaflet using Rio-tiler XarrayReader feature.
             </li>
             <li>
               Consider tile caching strategies.

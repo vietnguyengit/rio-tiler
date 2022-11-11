@@ -18,6 +18,7 @@ from rio_tiler.colormap import cmap
 import zarr
 import xarray as xr
 from dateutil import tz
+import matplotlib
 
 
 class SchemeEnum(str, Enum):
@@ -105,6 +106,31 @@ def get_time_range(
         "max_time": np_dt64_to_dt(ds.time.values[-1])})
     return Response(res, media_type="application/json")
 
+color_list = [
+    '#ffffff00',  # transparent
+    '#724C01',
+    '#CEA712',
+    '#FFA904',
+    '#FDFE00',
+    '#E6EC06',
+    '#BACF00',
+    '#8BB001',
+    '#72A002',
+    '#5B8D03',
+    '#448102',
+    '#2C7001',
+    '#176100'
+]
+
+imos = matplotlib.colors.LinearSegmentedColormap.from_list(
+    'imos', color_list,
+    256,
+)
+x = np.linspace(0, 1, 256)
+cmap_vals = imos(x)[:, :]
+cmap_uint8 = (cmap_vals * 255).astype('uint8')
+imos_dict = {idx: tuple(value) for idx, value in enumerate(cmap_uint8)}
+cmap = cmap.register({"imos": imos_dict})
 
 @app.get("/tiles/{z}/{x}/{y}", response_class=Response)
 def tile(
@@ -122,9 +148,9 @@ def tile(
         img = dst.tile(x, y, z, tilesize=256)
         img.rescale(
             in_range=((260, 320),),
-            out_range=((-20, 255),)
+            out_range=((0, 255),)
         )
-    cm = cmap.get('rdpu')
+    cm = cmap.get('imos')
     content = img.render(colormap=cm)
     return Response(content, media_type="image/png")
 
