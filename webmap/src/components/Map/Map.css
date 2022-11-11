@@ -2,5 +2,9 @@
     /*margin-left: 50vh;*/
     /*margin-right: 50vh;*/
     width: auto;
-    height: 60vh;
+    height: 65vh;
+}
+
+.slider {
+    width: 50vh !important;
 }

@@ -1,18 +1,23 @@
 import urllib
 from enum import Enum
 from typing import List, Optional, Tuple, Dict, Any
-
+import os
 import uvicorn
 from mangum import Mangum
 import xarray
 from fastapi import FastAPI, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, root_validator
+from starlette.middleware.cors import CORSMiddleware
+import json
+from datetime import datetime
+import numpy as np
 from rio_tiler.io.xarray import XarrayReader
 from starlette.requests import Request
 from rio_tiler.colormap import cmap
 import zarr
 import xarray as xr
+from dateutil import tz
 
 
 class SchemeEnum(str, Enum):
@@ -65,13 +70,41 @@ class TileJSON(BaseModel):
 
 
 app = FastAPI()
-cm = cmap.get('rdpu')
 
+origins = ["*"]
 
-url = 's3://imos-data-pixeldrill/vhnguyen/playground/multi-years'
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# url = 's3://imos-data-pixeldrill/vhnguyen/playground/multi-years'
+# url = 's3://imos-data-lab-optimised/4428/dummy_sst/backup/'
+url = os.getenv("ZARR_STORE")
 store = zarr.storage.FSStore(url)
-cache = zarr.LRUStoreCache(store, max_size=2**28)
+cache = zarr.LRUStoreCache(store, max_size=2 ** 28)
 ds = xr.open_dataset(cache, engine='zarr')
+
+
+def np_dt64_to_dt(in_datetime: np.datetime64) -> str:
+    """Convert numpy datetime64 to datetime"""
+    utc = datetime.fromtimestamp(in_datetime.astype(int) / 1e9)
+    to_zone = tz.tzlocal()
+    local = utc.astimezone(to_zone)
+    return local.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@app.get("/time_range", response_class=Response)
+def get_time_range(
+):
+    res = json.dumps({
+        "min_time": np_dt64_to_dt(ds.time.values[0]),
+        "max_time": np_dt64_to_dt(ds.time.values[-1])})
+    return Response(res, media_type="application/json")
+
 
 @app.get("/tiles/{z}/{x}/{y}", response_class=Response)
 def tile(
@@ -91,8 +124,9 @@ def tile(
             in_range=((260, 320),),
             out_range=((-20, 255),)
         )
-        content = img.render(colormap=cm)
-        return Response(content, media_type="image/png")
+    cm = cmap.get('rdpu')
+    content = img.render(colormap=cm)
+    return Response(content, media_type="image/png")
 
 
 @app.get(
