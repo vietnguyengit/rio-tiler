@@ -1,5 +1,7 @@
 # rio-tiler
 
+![image](https://user-images.githubusercontent.com/26201635/201367157-7b429a5f-860a-4778-9d02-eee4a92f32cb.png)
+
 <p align="center">
   <img src="https://user-images.githubusercontent.com/10407788/88133997-77560f00-cbb1-11ea-874c-a8f1d123a9df.jpg" style="max-width: 800px;" alt="rio-tiler"></a>
 </p>
