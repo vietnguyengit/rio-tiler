@@ -135,7 +135,7 @@ def tilejson(
 
 
 ### TEST ###
-@app.get("/")
+@app.get("/hello")
 def get_root():
     return {"message": "FastAPI running in a Lambda function"}
 
