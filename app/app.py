@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field, root_validator
 from rio_tiler.io.xarray import XarrayReader
 from starlette.requests import Request
 from rio_tiler.colormap import cmap
+import zarr
+import xarray as xr
 
 
 class SchemeEnum(str, Enum):
@@ -66,27 +68,31 @@ app = FastAPI()
 cm = cmap.get('rdpu')
 
 
+url = 's3://imos-data-pixeldrill/vhnguyen/playground/multi-years'
+store = zarr.storage.FSStore(url)
+cache = zarr.LRUStoreCache(store, max_size=2**28)
+ds = xr.open_dataset(cache, engine='zarr')
+
 @app.get("/tiles/{z}/{x}/{y}", response_class=Response)
 def tile(
         z: int,
         x: int,
         y: int,
-        url: str = Query(description="Zarr URL"),
         variable: str = Query(description="Zarr Variable"),
         idx: int = Query(description="Time index")
 ):
-    with xarray.open_dataset(url, engine="zarr", decode_coords="all") as src:
-        ds = src[variable][[idx]]
-        # Make sure we are a CRS
-        ds.rio.write_crs(4326, inplace=True)
-        with XarrayReader(ds) as dst:
-            img = dst.tile(x, y, z, tilesize=256)
-            img.rescale(
-                in_range=((260, 320),),
-                out_range=((-20, 255),)
-            )
-            content = img.render(colormap=cm)
-            return Response(content, media_type="image/png")
+    # with xarray.open_dataset(url, engine="zarr", decode_coords="all") as src:
+    da = ds[variable][[idx]]
+    # Make sure we are a CRS
+    da.rio.write_crs(4326, inplace=True)
+    with XarrayReader(da) as dst:
+        img = dst.tile(x, y, z, tilesize=256)
+        img.rescale(
+            in_range=((260, 320),),
+            out_range=((-20, 255),)
+        )
+        content = img.render(colormap=cm)
+        return Response(content, media_type="image/png")
 
 
 @app.get(
