@@ -134,6 +134,12 @@ def tilejson(
             )
 
 
+### TEST ###
+@app.get("/")
+def get_root():
+    return {"message": "FastAPI running in a Lambda function"}
+
+
 ###############################################################################
 #   Handler for AWS Lambda                                                    #
 ###############################################################################
