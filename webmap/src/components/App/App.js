@@ -1,4 +1,4 @@
-import React from "react";
+import React, {Component} from "react";
 import Map from "../Map/Map";
 import {AlertDismissible} from '../Notes/Notes';
 

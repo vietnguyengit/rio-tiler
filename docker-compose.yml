@@ -23,7 +23,7 @@ services:
       - loadbalancer
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.webmap.rule=Host(`localhost`) || Host(`ec2-13-239-27-195.ap-southeast-2.compute.amazonaws.com`)"
+      - "traefik.http.routers.webmap.rule=Host(`localhost`) || Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`)"
       - "traefik.http.services.webmap.loadbalancer.server.port=3000"
       - "traefik.http.routers.webmap.entrypoints=web"
 
@@ -35,7 +35,7 @@ services:
       - .env
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || (Host(`ec2-13-239-27-195.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tiles`)) || (Host(`ec2-13-239-27-195.ap-southeast-2.compute.amazonaws.com`) && Path(`/hello`)) || (Host(`ec2-13-239-27-195.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tilejson.json`))"
+      - "traefik.http.routers.backend.rule=Host(`rio.localhost`) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tiles`)) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && Path(`/hello`)) || (Host(`ec2-3-105-15-240.ap-southeast-2.compute.amazonaws.com`) && PathPrefix(`/tilejson.json`))"
       - "traefik.http.middlewares.backend.headers.accesscontrolalloworiginlist=http://ec2-52-64-149-143.ap-southeast-2.compute.amazonaws.com, http://localhost"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
       - "traefik.http.routers.backend.entrypoints=web"

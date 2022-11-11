@@ -76,19 +76,17 @@ def tile(
         idx: int = Query(description="Time index")
 ):
     with xarray.open_dataset(url, engine="zarr", decode_coords="all") as src:
-        ds = src.isel(time=[idx])[variable][:1]
+        ds = src[variable][[idx]]
         # Make sure we are a CRS
-        crs = ds.rio.crs or "epsg:4326"
-        ds.rio.write_crs(crs, inplace=True)
-
+        ds.rio.write_crs(4326, inplace=True)
         with XarrayReader(ds) as dst:
-            img = dst.tile(x, y, z)
+            img = dst.tile(x, y, z, tilesize=256)
             img.rescale(
                 in_range=((260, 320),),
                 out_range=((-20, 255),)
             )
-        content = img.render(colormap=cm)
-        return Response(content, media_type="image/png")
+            content = img.render(colormap=cm)
+            return Response(content, media_type="image/png")
 
 
 @app.get(
@@ -118,11 +116,9 @@ def tilejson(
         tile_url += f"?{urllib.parse.urlencode(qs)}"
 
     with xarray.open_dataset(url, engine="zarr", decode_coords="all") as src:
-        ds = src.isel(time=[idx])[variable][:1]
+        ds = src[variable][[idx]]
         # Make sure we are a CRS
-        crs = ds.rio.crs or "epsg:4326"
-        ds.rio.write_crs(crs, inplace=True)
-
+        ds.rio.write_crs(4326, inplace=True)
         with XarrayReader(ds) as dst:
             return dict(
                 bounds=dst.geographic_bounds,
