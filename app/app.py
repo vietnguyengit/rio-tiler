@@ -130,8 +130,8 @@ variables = [
 minmax_collections = []
 for var in variables:
     print("...processing: " + var)
-    minin = float(np.nanmin(ds[var][[0]])) * 1.2
-    maxin = float(np.nanmax(ds[var][[0]])) * 1.2
+    minin = float(np.nanmin(ds[var][[0]]))
+    maxin = float(np.nanmax(ds[var][[0]]))
     res = {
         "variable": var,
         "min": minin,
@@ -152,8 +152,8 @@ def tile(
     cm = cmap.get(cmap_name)
     for minmax in minmax_collections:
         if minmax["variable"] == variable:
-            minin = minmax["min"]
-            maxin = minmax["max"]
+            minin = minmax["min"] * 1.2
+            maxin = minmax["max"] * 1.2
     # with xarray.open_dataset(url, engine="zarr", decode_coords="all") as src:
     da = ds[variable][[idx]]
     # Make sure we are a CRS
