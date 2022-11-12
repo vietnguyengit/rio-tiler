@@ -1,10 +1,10 @@
 import React, {Component} from "react";
 import Map from "../Map/Map";
-import {AlertDismissible} from '../Notes/Notes';
 import config from '../../config/config.json';
 import axios from "axios";
 import RingLoader from 'react-spinners/RingLoader';
 import Filter from "../Filter/Filter";
+import ImosNavBar from "../NavBar/ImosNavBar";
 
 
 class App extends Component {
@@ -58,10 +58,7 @@ class App extends Component {
     ]
     return (
       <React.Fragment>
-        <AlertDismissible/>
-        <h2 className={"d-flex justify-content-center pt-3 pb-3"}>
-          IMOS SST & Rio-tiler 🛰️🗺️
-        </h2>
+        <ImosNavBar/>
         <Filter
           cmap_options={cmap_options}
           variable_options={variable_options}
@@ -83,7 +80,9 @@ class App extends Component {
               <Map time_range={time_range} cmap={cmap} map_variable={map_variable}/>
             </React.Fragment>
         }
-        <p className={"d-flex justify-content-end mx-2 fixed-bottom"}>Viet Nguyen | IMOS</p>
+        <div className={"d-flex justify-content-end mx-2 fixed-bottom"}>
+          <p>Viet Nguyen | IMOS</p>
+        </div>
       </React.Fragment>
     )
   }
