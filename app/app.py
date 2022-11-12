@@ -119,26 +119,26 @@ for name in cmap_names:
     cmap = cmap.register({"imos_"+name: dict(dict_val)})
 
 
-print("initialising minmax collections")
-variables = [
-    'sea_surface_temperature',
-    'satellite_zenith_angle',
-    'sses_bias',
-    'sses_count',
-    'sses_standard_deviation'
-]
-minmax_collections = []
-for var in variables:
-    print("...processing: " + var)
-    minin = float(np.nanmin(ds[var][[0]]))
-    maxin = float(np.nanmax(ds[var][[0]]))
-    res = {
-        "variable": var,
-        "min": minin,
-        "max": maxin
-    }
-    minmax_collections.append(res)
-print("ready...")
+# print("initialising minmax collections")
+# variables = [
+#     'sea_surface_temperature',
+#     'satellite_zenith_angle',
+#     'sses_bias',
+#     'sses_count',
+#     'sses_standard_deviation'
+# ]
+# minmax_collections = []
+# for var in variables:
+#     print("...processing: " + var)
+#     minin = float(np.nanmin(ds[var][[0]]))
+#     maxin = float(np.nanmax(ds[var][[0]]))
+#     res = {
+#         "variable": var,
+#         "min": minin,
+#         "max": maxin
+#     }
+#     minmax_collections.append(res)
+# print("ready...")
 
 @app.get("/tiles/{z}/{x}/{y}", response_class=Response)
 def tile(
@@ -150,14 +150,18 @@ def tile(
         cmap_name: str = Query(description="CMAP name")
 ):
     cm = cmap.get(cmap_name)
-    for minmax in minmax_collections:
-        if minmax["variable"] == variable:
-            minin = minmax["min"] * 1.2
-            maxin = minmax["max"] * 1.2
+    # for minmax in minmax_collections:
+    #     if minmax["variable"] == variable:
+    #         minin = minmax["min"] * 1.2
+    #         maxin = minmax["max"] * 1.2
     # with xarray.open_dataset(url, engine="zarr", decode_coords="all") as src:
     da = ds[variable][[idx]]
     # Make sure we are a CRS
     da.rio.write_crs(4326, inplace=True)
+
+    minin = float(np.nanmin(da))
+    maxin = float(np.nanmax(da))
+
     with XarrayReader(da) as dst:
         img = dst.tile(x, y, z, tilesize=256)
 
