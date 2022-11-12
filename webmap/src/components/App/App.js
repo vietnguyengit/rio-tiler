@@ -11,7 +11,7 @@ class App extends Component {
   state = {
     loading: null,
     time_range: {},
-    cmap: "imos_viridis",
+    cmap: "imos_rainbow",
     map_variable: "sea_surface_temperature"
   }
 
@@ -48,14 +48,13 @@ class App extends Component {
   render() {
     const {loading, time_range, cmap, map_variable} = this.state;
     const cmap_options = [
-      { value: 'imos_viridis', label: 'IMOS Viridis' },
-      { value: 'imos_plasma', label: 'IMOS Plasma' },
-      { value: 'imos_cividis', label: 'IMOS Cividis' },
+      { value: 'imos_rainbow', label: 'IMOS Rainbow (full custom)' }
     ]
     // a boilerplate
     const variable_options = [
       { value: 'sea_surface_temperature', label: 'sea_surface_temperature' }
     ]
+
     return (
       <React.Fragment>
         <ImosNavBar/>

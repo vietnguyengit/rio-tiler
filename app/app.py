@@ -109,15 +109,42 @@ def get_time_range(
 
 
 print("registering custom cmaps")
-cmap_names = ['plasma', 'viridis', 'cividis']
-for name in cmap_names:
-    cm = cmap.get(name)
-    values = list(cm.values())
-    values.pop(0)
-    values.insert(0, (255, 255, 255, 0))  # replace the first color with transparent
-    dict_val = {idx: tuple(value) for idx, value in enumerate(values)}
-    cmap = cmap.register({"imos_"+name: dict(dict_val)})
+# cmap_names = ['plasma', 'viridis', 'cividis']
+# for name in cmap_names:
+#     cm = cmap.get(name)
+#     values = list(cm.values())
+#     values.pop(0)
+#     values.insert(0, (255, 255, 255, 0))  # replace the first color with transparent
+#     dict_val = {idx: tuple(value) for idx, value in enumerate(values)}
+#     cmap = cmap.register({"imos_"+name: dict(dict_val)})
 
+imos_rainbow = matplotlib.colors.LinearSegmentedColormap.from_list(
+    'imos_rainbow', [
+        '#ffffff00',
+        '#10002B',
+        '#1B004E',
+        '#3C096C',
+        '#5A189A',
+        '#7B2CBF',
+        '#9D4EDD',
+        '#3F37C9',
+        '#52D185',
+        '#fee090',
+        '#fdae61',
+        '#f46d43',
+        '#d73027',
+        '#a50026',
+        '#73001a'
+    ],
+    256,
+)
+x = np.linspace(0, 1, 256)
+cmap_vals = imos_rainbow(x)[:, :]
+cmap_uint8 = (cmap_vals * 255).astype('uint8')
+imos_rainbow_dict = {idx: tuple(value) for idx, value in enumerate(cmap_uint8)}
+cmap = cmap.register({"imos_rainbow": imos_rainbow_dict})
+
+print("ready!")
 
 @app.get("/tiles/{z}/{x}/{y}", response_class=Response)
 def tile(
