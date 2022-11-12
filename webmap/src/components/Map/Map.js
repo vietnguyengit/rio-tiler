@@ -11,7 +11,7 @@ const Map = (props) => {
 
   const position = [-30, 135];
   const {time_range} = props;
-  const {cmap} = props;
+  const {cmap, map_variable} = props;
 
   const timeDimensionOptions = {
     timeInterval: `${time_range["min_time"]}/${time_range["max_time"]}`,
@@ -19,9 +19,9 @@ const Map = (props) => {
   };
 
   const timeDimensionControlOptions = {
-    forwardButton: false,
+    forwardButton: true,
     playButton: false,
-    backwardButton: false,
+    backwardButton: true,
     speedSlider: false
   }
 
@@ -35,7 +35,10 @@ const Map = (props) => {
       timeDimensionControlOptions={timeDimensionControlOptions}
       timeDimensionControl
     >
-      <Leaflet cmap={cmap}/>
+      <Leaflet
+        cmap={cmap}
+        map_variable={map_variable}
+      />
     </MapContainer>
   );
 };
@@ -44,7 +47,7 @@ const Leaflet = (props) => {
 
   const map = useMap();
   const [currentTimeIndex, setCurrentTimeIndex] = useState(-1);
-  const {cmap} = props;
+  const {cmap, map_variable} = props;
   map.timeDimension.on("timeloading", (data) => {
     setCurrentTimeIndex(data.target._currentTimeIndex);
   });
@@ -53,9 +56,9 @@ const Leaflet = (props) => {
   useEffect(() => {
     if (ref.current) {
       // console.log(`_index: ${currentTimeIndex}`);
-      ref.current.setUrl(`${config["rio_api"]}/tiles/{z}/{x}/{y}?&variable=sea_surface_temperature&idx=${currentTimeIndex}&cmap_name=${cmap}`);
+      ref.current.setUrl(`${config["rio_api"]}/tiles/{z}/{x}/{y}?&variable=${map_variable}&idx=${currentTimeIndex}&cmap_name=${cmap}`);
     }
-  }, [currentTimeIndex, cmap]);
+  }, [currentTimeIndex, cmap, map_variable]);
 
   return (
     <React.Fragment>

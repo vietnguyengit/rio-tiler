@@ -4,15 +4,15 @@ import {AlertDismissible} from '../Notes/Notes';
 import config from '../../config/config.json';
 import axios from "axios";
 import RingLoader from 'react-spinners/RingLoader';
-import Select from 'react-select';
-import {FormLabel} from "react-bootstrap";
+import Filter from "../Filter/Filter";
 
 
 class App extends Component {
   state = {
     loading: null,
     time_range: {},
-    cmap: "imos_viridis"
+    cmap: "imos_viridis",
+    map_variable: "sea_surface_temperature"
   }
 
   componentWillMount = async () => {
@@ -32,36 +32,45 @@ class App extends Component {
     })
   }
 
-  onChange = (data) => {
+  onChangeCmap = (data) => {
     // console.log(data["value"])
     this.setState({
       cmap: data["value"]
     })
   }
 
+  onChangeVariable = (data) => {
+    this.setState({
+      map_variable: data["value"]
+    })
+  }
+
   render() {
-    const {loading, time_range, cmap} = this.state;
-    const options = [
+    const {loading, time_range, cmap, map_variable} = this.state;
+    const cmap_options = [
       { value: 'imos_viridis', label: 'IMOS Viridis' },
       { value: 'imos_plasma', label: 'IMOS Plasma' },
-      { value: 'imos_cividis', label: 'IMOS Cividis' }
+      { value: 'imos_cividis', label: 'IMOS Cividis' },
+    ]
+    const variable_options = [
+      { value: 'sea_surface_temperature', label: 'sea_surface_temperature' },
+      { value: 'satellite_zenith_angle', label: 'satellite_zenith_angle' },
+      { value: 'sses_bias', label: 'sses_bias' },
+      { value: 'sses_count', label: 'sses_count' },
+      { value: 'sses_standard_deviation', label: 'sses_standard_deviation' },
     ]
     return (
       <React.Fragment>
-        <div className={"mx-2"}>
-          <AlertDismissible/>
-        </div>
-        <div>
-          <h2 className={"d-flex justify-content-center pt-3 pb-3"}>
-            IMOS SST & Rio-tiler 🛰️🗺️
-          </h2>
-        </div>
-        <div className={"d-flex justify-content-end mt-2 mx-2 mb-2"}>
-          <FormLabel htmlFor={"cmap"} className={"col-form-label mx-2"}>CMAP: </FormLabel>
-          <div className={"col-sm-5"}>
-            <Select id={"cmap"} options={options} onChange={this.onChange} defaultValue={options[0]} menuPortalTarget={document.body}/>
-          </div>
-        </div>
+        <AlertDismissible/>
+        <h2 className={"d-flex justify-content-center pt-3 pb-3"}>
+          IMOS SST & Rio-tiler 🛰️🗺️
+        </h2>
+        <Filter
+          cmap_options={cmap_options}
+          variable_options={variable_options}
+          onChangeCmap={this.onChangeCmap}
+          onChangeVariable={this.onChangeVariable}
+        />
         {
           loading ?
             <React.Fragment>
@@ -74,10 +83,10 @@ class App extends Component {
             </React.Fragment>
           :
             <React.Fragment>
-              <Map time_range={time_range} cmap={cmap}/>
+              <Map time_range={time_range} cmap={cmap} map_variable={map_variable}/>
             </React.Fragment>
         }
-        <p className={"d-flex justify-content-end mx-2 fixed-bottom"}>Viet Nguyen | IMOS | Hobart, Tasmania</p>
+        <p className={"d-flex justify-content-end mx-2 fixed-bottom"}>Viet Nguyen | IMOS</p>
       </React.Fragment>
     )
   }
