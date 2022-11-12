@@ -20,7 +20,7 @@ const Filter = (props) => {
         <Col md>
           <Row className={"g-1"}>
             <Col xs="auto">
-              <FormLabel htmlFor={"cmap"} className={"bg-primary text-white p-2"}>CMAP</FormLabel>
+              <FormLabel htmlFor={"cmap"} className={"bg-primary text-white p-2"}>Color scheme</FormLabel>
             </Col>
             <Col>
               <Select id={"cmap"} options={cmap_options} onChange={onChangeCmap} defaultValue={cmap_options[0]}/>

@@ -52,12 +52,9 @@ class App extends Component {
       { value: 'imos_plasma', label: 'IMOS Plasma' },
       { value: 'imos_cividis', label: 'IMOS Cividis' },
     ]
+    // a boilerplate
     const variable_options = [
-      { value: 'sea_surface_temperature', label: 'sea_surface_temperature' },
-      { value: 'satellite_zenith_angle', label: 'satellite_zenith_angle' },
-      { value: 'sses_bias', label: 'sses_bias' },
-      { value: 'sses_count', label: 'sses_count' },
-      { value: 'sses_standard_deviation', label: 'sses_standard_deviation' },
+      { value: 'sea_surface_temperature', label: 'sea_surface_temperature' }
     ]
     return (
       <React.Fragment>
