@@ -2,10 +2,6 @@
     /*margin-left: 50vh;*/
     /*margin-right: 50vh;*/
     width: auto;
-    height: 65vh;
+    height: 70vh;
     z-index: 0;
-}
-
-.slider {
-    width: 50vh !important;
 }

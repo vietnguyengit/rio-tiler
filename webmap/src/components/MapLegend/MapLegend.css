@@ -1,0 +1,11 @@
+.legend {
+    line-height: 20px;
+    color: #555;
+}
+.legend i {
+    width: 20px;
+    height: 20px;
+    float: left;
+    margin-right: 8px;
+    opacity: 1;
+}

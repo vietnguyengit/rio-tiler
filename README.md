@@ -1,8 +1,6 @@
 # rio-tiler
 
-![image](https://user-images.githubusercontent.com/26201635/201446299-7a6aa135-d225-48e0-874c-ed2fedb197cc.png)
-![image](https://user-images.githubusercontent.com/26201635/201446348-26c2ccb6-b2c1-45ce-ae66-d66c295ae7c4.png)
-![image](https://user-images.githubusercontent.com/26201635/201446431-66010dac-18de-418c-aff9-a16c11bba804.png)
+![image](https://user-images.githubusercontent.com/26201635/201484674-dede38bd-2df6-41c0-8ab2-a946f7b55b8c.png)
 
 <p align="center">
   <img src="https://user-images.githubusercontent.com/10407788/88133997-77560f00-cbb1-11ea-874c-a8f1d123a9df.jpg" style="max-width: 800px;" alt="rio-tiler"></a>
