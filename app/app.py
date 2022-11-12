@@ -130,8 +130,8 @@ variables = [
 minmax_collections = []
 for var in variables:
     print("...processing: " + var)
-    minin = float(np.nanmin(ds[var][[0]]))
-    maxin = float(np.nanmax(ds[var][[0]]))
+    minin = float(np.nanmin(ds[var][[0]])) * 1.2
+    maxin = float(np.nanmax(ds[var][[0]])) * 1.2
     res = {
         "variable": var,
         "min": minin,
