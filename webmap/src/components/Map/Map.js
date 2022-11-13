@@ -78,7 +78,7 @@ const Leaflet = (props) => {
           url={""}
         />
       </LayerGroup>
-      <MapLegend map={map} date={selectedDateRef.current}/>
+      <MapLegend map={map}/>
     </React.Fragment>);
 };
 
