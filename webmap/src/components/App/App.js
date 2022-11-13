@@ -1,59 +1,58 @@
 import React, {Component} from "react";
 import Map from "../Map/Map";
-import config from '../../config/config.json';
-import axios from "axios";
 import RingLoader from 'react-spinners/RingLoader';
 // import Filter from "../Filter/Filter";
 import ImosNavBar from "../NavBar/ImosNavBar";
+import {get_time_range} from "../../helper/helper";
 
 
 class App extends Component {
   state = {
-    loading: null,
+    loading: false,
     time_range: {},
     cmap: "imos_rainbow",
     map_variable: "sea_surface_temperature"
   }
 
-  componentWillMount = async () => {
+  componentWillMount = async () =>
+   {
     this.setState({
       loading: true
     })
-    await axios.get(`${config["rio_api"]}/time_range`).then((res) => {
-      const min_time = res.data["min_time"];
-      const max_time = res.data["max_time"];
-      this.setState({
-        time_range: {
-          min_time: min_time,
-          max_time: max_time
-        },
-        loading: false
-      });
+    const res = await get_time_range();
+    this.setState({
+      time_range: {
+        min_time: res.data["min_time"],
+        max_time: res.data["max_time"]
+      },
+      loading: false
     })
   }
 
-  onChangeCmap = (data) => {
-    // console.log(data["value"])
-    this.setState({
-      cmap: data["value"]
-    })
-  }
-
-  onChangeVariable = (data) => {
-    this.setState({
-      map_variable: data["value"]
-    })
-  }
+  // onChangeCmap = (data) => {
+  //   // console.log(data["value"])
+  //   this.setState({
+  //     cmap: data["value"]
+  //   })
+  // }
+  //
+  // onChangeVariable = (data) => {
+  //   this.setState({
+  //     map_variable: data["value"]
+  //   })
+  // }
 
   render() {
     const {loading, time_range, cmap, map_variable} = this.state;
-    const cmap_options = [
-      { value: 'imos_rainbow', label: 'IMOS Rainbow (full custom)' }
-    ]
-    // a boilerplate
-    const variable_options = [
-      { value: 'sea_surface_temperature', label: 'sea_surface_temperature' }
-    ]
+    // console.log(time_range);
+
+    // const cmap_options = [
+    //   { value: 'imos_rainbow', label: 'IMOS Rainbow (full custom)' }
+    // ]
+    // // a boilerplate
+    // const variable_options = [
+    //   { value: 'sea_surface_temperature', label: 'sea_surface_temperature' }
+    // ]
 
     return (
       <React.Fragment>

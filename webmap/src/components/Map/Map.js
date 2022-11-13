@@ -7,7 +7,7 @@ import "leaflet/dist/leaflet.css";
 import "leaflet-timedimension/dist/leaflet.timedimension.control.min.css";
 import "iso8601-js-period";
 import MapLegend from "../MapLegend/MapLegend";
-import L from 'leaflet';
+import {get_selected_date} from "../../helper/helper";
 
 
 class Map extends Component {
@@ -24,23 +24,25 @@ class Map extends Component {
       forwardButton: true,
       playButton: false,
       backwardButton: true,
-      speedSlider: false
+      speedSlider: false,
+      displayDate: false
     }
     return (
-      <MapContainer
-        center={position}
-        zoom={4}
-        scrollWheelZoom={true}
-        timeDimension
-        timeDimensionOptions={timeDimensionOptions}
-        timeDimensionControlOptions={timeDimensionControlOptions}
-        timeDimensionControl
-      >
-        <Leaflet
-          cmap={cmap}
-          map_variable={map_variable}
-        />
-      </MapContainer>
+        <MapContainer
+          center={position}
+          zoom={4}
+          scrollWheelZoom={true}
+          timeDimension
+          timeDimensionOptions={timeDimensionOptions}
+          timeDimensionControlOptions={timeDimensionControlOptions}
+          timeDimensionControl
+        >
+          <Leaflet
+            cmap={cmap}
+            map_variable={map_variable}
+            start_time={time_range["min_time"]}
+          />
+        </MapContainer>
     );
   }
 }
@@ -48,13 +50,16 @@ class Map extends Component {
 const Leaflet = (props) => {
   const map = useMap();
   const [currentTimeIndex, setCurrentTimeIndex] = useState(0);
-  const {cmap, map_variable} = props;
 
+  const {start_time, cmap, map_variable} = props;
   const ref = useRef(null);
+  const selectedDateRef = useRef(start_time);
   useEffect(() => {
     if (ref.current) {
       // console.log(`_index: ${currentTimeIndex}`);
-      map.timeDimension.on("timeloading", (data) => {
+      map.timeDimension.on("timeloading", async (data) => {
+        const res = await get_selected_date(data.target._currentTimeIndex);
+        selectedDateRef.current = res.data["selected_date"];
         setCurrentTimeIndex(data.target._currentTimeIndex);
       });
       ref.current.setUrl(`${config["rio_api"]}/tiles/{z}/{x}/{y}?&variable=${map_variable}&idx=${currentTimeIndex}&cmap_name=${cmap}`);
@@ -63,6 +68,7 @@ const Leaflet = (props) => {
 
   return (
     <React.Fragment>
+      <p className={"fixed-bottom mx-2 h6 text-muted"}>{`Displaying: ${selectedDateRef.current}`}</p>
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
