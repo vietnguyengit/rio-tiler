@@ -146,6 +146,18 @@ cmap = cmap.register({"imos_rainbow": imos_rainbow_dict})
 
 print("ready!")
 
+
+@app.get("/time_range/date", response_class=Response)
+def get_time_range(
+        idx: int = Query(description="Time index"),
+):
+    da = ds.isel(time=[idx])
+    res = json.dumps({
+        "selected_date": np_dt64_to_dt(da.time.values[0])
+    })
+    return Response(res, media_type="application/json")
+
+
 @app.get("/tiles/{z}/{x}/{y}", response_class=Response)
 def tile(
         z: int,
