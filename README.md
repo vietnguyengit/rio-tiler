@@ -1,6 +1,6 @@
 # rio-tiler
 
-![image](https://user-images.githubusercontent.com/26201635/201367157-7b429a5f-860a-4778-9d02-eee4a92f32cb.png)
+![image](https://user-images.githubusercontent.com/26201635/201484674-dede38bd-2df6-41c0-8ab2-a946f7b55b8c.png)
 
 <p align="center">
   <img src="https://user-images.githubusercontent.com/10407788/88133997-77560f00-cbb1-11ea-874c-a8f1d123a9df.jpg" style="max-width: 800px;" alt="rio-tiler"></a>
