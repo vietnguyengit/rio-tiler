@@ -1,6 +1,67 @@
-# rio-tiler
+# IMOS SST & Rio-tiler 🛰️🗺️
 
-![image](https://user-images.githubusercontent.com/26201635/201484914-3ca62c76-242b-4b5b-963e-2ec333f82731.png)
+![image](https://user-images.githubusercontent.com/26201635/201508844-f15090b4-4e30-4290-930d-31f6137e7a91.png)
+
+It's recommended to setup a virtual env e.g. Conda
+
+## Dependencies
+
+```bash
+rio-tiler$ pip install -r requirements.txt
+rio-tiler$ pip install -e .
+```
+
+## For webmap app:
+
+To start the webmap app:
+
+```bash
+rio-tiler/webapp$ npm install
+rio-tiler/webapp$ npm start
+```
+
+To change Rio-tiler API endpoint, update in `webmap/config/config.json`.
+
+```json
+{
+  "rio_api": "<api-root-endpoint>"
+}
+```
+
+For local development: the root endpoint would be `http://localhost:8000`
+
+## For Rio-tiler server:
+
+To change Zarr store S3 path, update in `./docker-compose.yml`.
+
+```yaml
+backend:
+  env_file:
+    - .env
+  environment:
+    ZARR_STORE: s3://<store-path>
+```
+
+For local development, start the API server with the command:
+
+```bash
+rio-tiler$ export ZARR_STORE=s3://<store-path>
+rio-tiler$ uvicorn app.app:app --host localhost --port 8000 --reload
+```
+
+## Docker-compose and deployment
+
+```bash
+docker-compose up -d
+```
+
+After running the containers, on local, accessing the webmapp from `http://localhost` and the root API endpoint is at `http://rio.localhost`
+
+For EC2 deployment, you might want to update hard-coded EC2 public DNS in the `docker-compose.yml` file.
+
+---
+
+# Original README contents
 
 <p align="center">
   <img src="https://user-images.githubusercontent.com/10407788/88133997-77560f00-cbb1-11ea-874c-a8f1d123a9df.jpg" style="max-width: 800px;" alt="rio-tiler"></a>

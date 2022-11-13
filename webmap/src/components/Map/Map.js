@@ -7,14 +7,18 @@ import "leaflet/dist/leaflet.css";
 import "leaflet-timedimension/dist/leaflet.timedimension.control.min.css";
 import "iso8601-js-period";
 import MapLegend from "../MapLegend/MapLegend";
+import L from 'leaflet';
+
 
 class Map extends Component {
   render() {
     const position = [-30, 135];
     const {time_range, cmap, map_variable} = this.props;
+    const start_time_ms = Math.floor((new Date(time_range["min_time"])).getTime())
     const timeDimensionOptions = {
       timeInterval: `${time_range["min_time"]}/${time_range["max_time"]}`,
       period: "P1D",
+      currentTime: start_time_ms
     };
     const timeDimensionControlOptions = {
       forwardButton: true,
@@ -43,19 +47,20 @@ class Map extends Component {
 
 const Leaflet = (props) => {
   const map = useMap();
-  const [currentTimeIndex, setCurrentTimeIndex] = useState(-1);
+  const [currentTimeIndex, setCurrentTimeIndex] = useState(0);
   const {cmap, map_variable} = props;
-  map.timeDimension.on("timeloading", (data) => {
-    setCurrentTimeIndex(data.target._currentTimeIndex);
-  });
 
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current) {
       // console.log(`_index: ${currentTimeIndex}`);
+      map.timeDimension.on("timeloading", (data) => {
+        setCurrentTimeIndex(data.target._currentTimeIndex);
+      });
       ref.current.setUrl(`${config["rio_api"]}/tiles/{z}/{x}/{y}?&variable=${map_variable}&idx=${currentTimeIndex}&cmap_name=${cmap}`);
     }
   }, [currentTimeIndex, cmap, map_variable]);
+
   return (
     <React.Fragment>
       <TileLayer
