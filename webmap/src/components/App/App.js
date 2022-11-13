@@ -58,12 +58,17 @@ class App extends Component {
     return (
       <React.Fragment>
         <ImosNavBar/>
-        <Filter
-          cmap_options={cmap_options}
-          variable_options={variable_options}
-          onChangeCmap={this.onChangeCmap}
-          onChangeVariable={this.onChangeVariable}
-        />
+        {/*<Filter*/}
+        {/*  cmap_options={cmap_options}*/}
+        {/*  variable_options={variable_options}*/}
+        {/*  onChangeCmap={this.onChangeCmap}*/}
+        {/*  onChangeVariable={this.onChangeVariable}*/}
+        {/*/>*/}
+        <div className={"d-flex justify-content-center mb-3"}>
+          <h3 className={"align-center"}>
+            IMOS SST & Rio-tiler 🛰️🗺️
+          </h3>
+        </div>
         {
           loading ?
             <React.Fragment>

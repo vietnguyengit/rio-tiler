@@ -45,17 +45,18 @@ const Leaflet = (props) => {
   const map = useMap();
   const [currentTimeIndex, setCurrentTimeIndex] = useState(-1);
   const {cmap, map_variable} = props;
-  map.timeDimension.on("timeloading", (data) => {
-    setCurrentTimeIndex(data.target._currentTimeIndex);
-  });
 
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current) {
-      // console.log(`_index: ${currentTimeIndex}`);
+      console.log(`_index: ${currentTimeIndex}`);
+      map.timeDimension.on("timeloading", (data) => {
+        setCurrentTimeIndex(data.target._currentTimeIndex);
+      });
       ref.current.setUrl(`${config["rio_api"]}/tiles/{z}/{x}/{y}?&variable=${map_variable}&idx=${currentTimeIndex}&cmap_name=${cmap}`);
     }
   }, [currentTimeIndex, cmap, map_variable]);
+
   return (
     <React.Fragment>
       <TileLayer
