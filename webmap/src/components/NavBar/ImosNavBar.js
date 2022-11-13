@@ -3,7 +3,7 @@ import {Container, Navbar} from "react-bootstrap";
 
 const ImosNavBar = () => {
   return(
-    <Navbar className={"mb-3 bg-light border-bottom"}>
+    <Navbar className={"bg-light border-bottom"}>
       <Container>
         <Navbar.Brand>
           <img

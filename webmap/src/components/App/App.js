@@ -3,7 +3,7 @@ import Map from "../Map/Map";
 import config from '../../config/config.json';
 import axios from "axios";
 import RingLoader from 'react-spinners/RingLoader';
-import Filter from "../Filter/Filter";
+// import Filter from "../Filter/Filter";
 import ImosNavBar from "../NavBar/ImosNavBar";
 
 
@@ -64,7 +64,7 @@ class App extends Component {
         {/*  onChangeCmap={this.onChangeCmap}*/}
         {/*  onChangeVariable={this.onChangeVariable}*/}
         {/*/>*/}
-        <div className={"d-flex justify-content-center mb-3"}>
+        <div className={"d-flex justify-content-center mb-3 mt-3"}>
           <h3 className={"align-center"}>
             IMOS SST & Rio-tiler 🛰️🗺️
           </h3>
