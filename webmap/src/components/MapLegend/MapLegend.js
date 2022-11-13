@@ -6,36 +6,28 @@ function MapLegend({map}) {
   useEffect(() => {
     if (map) {
       const getColor = d => {
-        return d > 320
-          ? "#a50026"
-          : d > 315
-            ? "#d73027"
-            : d > 310
-              ? "#f46d43"
-              : d > 305
-                ? "#fdae61"
-                : d > 300
-                  ? "#fee090"
-                  : d > 295
-                    ? "#52D185"
-                    : d > 290
-                      ? "#3F37C9"
-                        : d > 285
-                          ? "#9D4EDD"
-                            : d > 280
-                              ? "#7B2CBF"
-                              : d > 275
-                                ? "#5A189A"
-                                : d > 270
-                                  ? "#3C096C"
-                                  : d > 265
-                                    ? "#1B004E"
-                                      : "#10002B";
+        return d > 310
+          ? "#f46d43"
+          : d > 305
+            ? "#fdae61"
+            : d > 300
+              ? "#fee090"
+              : d > 295
+                ? "#52D185"
+                : d > 290
+                  ? "#3F37C9"
+                    : d > 285
+                      ? "#9D4EDD"
+                        : d > 280
+                          ? "#7B2CBF"
+                          : d > 275
+                            ? "#5A189A"
+                            : "#3C096C";
       };
       const legend = L.control({position: "bottomright"});
       legend.onAdd = () => {
         const div = L.DomUtil.create("div", "info legend");
-        const grades = [260, 265, 270, 275, 280, 285, 290, 295, 300, 305, 310, 315, 320]
+        const grades = [270, 275, 280, 285, 290, 295, 300, 305, 310]
         // list above produced by below Python statement where 260 is the lowest recorded kelvin degree and 321 is the highest
         // for x in range(260, 321):
         //   if x % 5 == 0:
