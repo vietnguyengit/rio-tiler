@@ -4,22 +4,27 @@ import json
 import os
 from unittest.mock import patch
 
+import attr
 import numpy
 import pytest
 import rasterio
+from rasterio._env import get_gdal_config
 
 from rio_tiler.errors import (
+    AssetAsBandError,
     ExpressionMixingWarning,
     InvalidAssetName,
     MissingAssets,
     TileOutsideBounds,
 )
-from rio_tiler.io import STACReader
+from rio_tiler.io import Reader, STACReader
 from rio_tiler.models import BandStatistics
 
 PREFIX = os.path.join(os.path.dirname(__file__), "fixtures")
 STAC_PATH = os.path.join(PREFIX, "stac.json")
 STAC_REL_PATH = os.path.join(PREFIX, "stac_relative.json")
+STAC_GDAL_PATH = os.path.join(PREFIX, "stac_headers.json")
+STAC_RASTER_PATH = os.path.join(PREFIX, "stac_raster.json")
 
 with open(STAC_PATH) as f:
     item = json.loads(f.read())
@@ -35,13 +40,14 @@ def mock_rasterio_open(asset):
 @patch("rio_tiler.io.stac.aws_get_object")
 @patch("rio_tiler.io.stac.httpx")
 def test_fetch_stac(httpx, s3_get):
+    """Test STACReader."""
     # Local path
     with STACReader(STAC_PATH) as stac:
         assert stac.minzoom == 0
         assert stac.maxzoom == 24
         assert stac.bounds
         assert stac.input == STAC_PATH
-        assert stac.assets == ["red", "green", "blue"]
+        assert stac.assets == ["red", "green", "blue", "lowres"]
     httpx.assert_not_called()
     s3_get.assert_not_called()
 
@@ -50,13 +56,13 @@ def test_fetch_stac(httpx, s3_get):
         assert stac.minzoom == 0
         assert stac.maxzoom == 24
         assert not stac.input
-        assert stac.assets == ["red", "green", "blue"]
+        assert stac.assets == ["red", "green", "blue", "lowres"]
     httpx.assert_not_called()
     s3_get.assert_not_called()
 
     # Exclude red
     with STACReader(STAC_PATH, exclude_assets={"red"}) as stac:
-        assert stac.assets == ["green", "blue"]
+        assert stac.assets == ["green", "blue", "lowres"]
     httpx.assert_not_called()
     s3_get.assert_not_called()
 
@@ -104,7 +110,7 @@ def test_fetch_stac(httpx, s3_get):
         httpx.get.return_value = MockResponse(f.read())
 
     with STACReader("http://somewhereovertherainbow.io/mystac.json") as stac:
-        assert stac.assets == ["red", "green", "blue"]
+        assert stac.assets == ["red", "green", "blue", "lowres"]
     httpx.get.assert_called_once()
     s3_get.assert_not_called()
     httpx.mock_reset()
@@ -114,7 +120,7 @@ def test_fetch_stac(httpx, s3_get):
         s3_get.return_value = f.read()
 
     with STACReader("s3://somewhereovertherainbow.io/mystac.json") as stac:
-        assert stac.assets == ["red", "green", "blue"]
+        assert stac.assets == ["red", "green", "blue", "lowres"]
     httpx.assert_not_called()
     s3_get.assert_called_once()
     assert s3_get.call_args[0] == ("somewhereovertherainbow.io", "mystac.json")
@@ -374,6 +380,7 @@ def test_point_valid(rio):
             asset_indexes={"green": (1, 1), "red": 1},
         )
         assert len(pt.data) == 3
+        assert len(pt.mask) == 1
         assert numpy.array_equal(pt.data, numpy.array([7994, 7994, 7003]))
         assert pt.band_names == ["green_b1", "green_b1", "red_b1"]
 
@@ -384,6 +391,7 @@ def test_point_valid(rio):
 
         pt = stac.point(-80.477, 33.4453, expression="green_b1*2;green_b1;red_b1*2")
         assert len(pt.data) == 3
+        assert len(pt.mask) == 1
         assert pt.band_names == ["green_b1*2", "green_b1", "red_b1*2"]
 
 
@@ -441,7 +449,7 @@ def test_merged_statistics_valid(rio):
     with STACReader(STAC_PATH) as stac:
         with pytest.warns(UserWarning):
             stats = stac.merged_statistics()
-            assert len(stats) == 3
+            assert len(stats) == 4
             assert isinstance(stats["red_b1"], BandStatistics)
             assert stats["red_b1"]
             assert stats["green_b1"]
@@ -596,21 +604,31 @@ def test_feature_valid(rio):
         assert img.mask.shape == (118, 96)
         assert img.band_names == ["green_b1*2", "green_b1", "red_b1*2"]
 
+        with pytest.warns(
+            UserWarning,
+            match="Cannot concatenate images with different size. Will resize using max width/heigh",
+        ):
+            img = stac.feature(feat, assets=("blue", "lowres"))
+        assert img.data.shape == (2, 118, 96)
+        assert img.mask.shape == (118, 96)
+        assert img.band_names == ["blue_b1", "lowres_b1"]
+
 
 def test_relative_assets():
     """Should return absolute href for assets"""
     with STACReader(STAC_REL_PATH) as stac:
-        for (key, asset) in stac.item.assets.items():
+        for (_key, asset) in stac.item.assets.items():
             assert asset.get_absolute_href().startswith(PREFIX)
         assert len(stac.assets) == 5
 
         for asset in stac.assets:
-            assert stac._get_asset_url(asset).startswith(PREFIX)
+            assert stac._get_asset_info(asset)["url"].startswith(PREFIX)
 
 
 @patch("rio_tiler.io.stac.aws_get_object")
 @patch("rio_tiler.io.stac.httpx")
 def test_fetch_stac_client_options(httpx, s3_get):
+    """test options forwarding."""
     # HTTP
     class MockResponse:
         def __init__(self, data):
@@ -632,7 +650,7 @@ def test_fetch_stac_client_options(httpx, s3_get):
             "headers": {"Authorization": "Bearer token"},
         },
     ) as stac:
-        assert stac.assets == ["red", "green", "blue"]
+        assert stac.assets == ["red", "green", "blue", "lowres"]
     httpx.get.assert_called_once()
     assert httpx.get.call_args[1]["auth"] == ("user", "pass")
     assert httpx.get.call_args[1]["headers"] == {"Authorization": "Bearer token"}
@@ -645,7 +663,7 @@ def test_fetch_stac_client_options(httpx, s3_get):
             "headers": {"Authorization": "Bearer token"},
         },
     ) as stac:
-        assert stac.assets == ["red", "green", "blue"]
+        assert stac.assets == ["red", "green", "blue", "lowres"]
 
     # Check if it was cached
     assert httpx.get.call_count == 1
@@ -659,7 +677,7 @@ def test_fetch_stac_client_options(httpx, s3_get):
         "s3://somewhereovertherainbow.io/mystac.json",
         fetch_options={"request_pays": True},
     ) as stac:
-        assert stac.assets == ["red", "green", "blue"]
+        assert stac.assets == ["red", "green", "blue", "lowres"]
     httpx.assert_not_called()
     s3_get.assert_called_once()
     assert s3_get.call_args[1]["request_pays"]
@@ -677,3 +695,130 @@ def test_img_dataset_stats(rio):
 
         img = stac.preview(expression="green_b1/red_b1")
         assert img.dataset_statistics == [(6883 / 65035, 62785 / 6101)]
+
+
+@attr.s
+class CustomReader(Reader):
+    """Custom Reader for STAC."""
+
+    def __attrs_post_init__(self):
+        """Post Init."""
+        assert get_gdal_config("GDAL_INGESTED_BYTES_AT_OPEN") == 50000
+        super().__attrs_post_init__()
+
+
+def test_gdal_env_setting():
+    """Test Env settings."""
+    with STACReader(STAC_GDAL_PATH, reader=CustomReader) as stac:
+        assert not get_gdal_config("GDAL_INGESTED_BYTES_AT_OPEN") == 50000
+        assert stac.preview(assets=["red", "green", "blue"])
+
+
+@patch("rio_tiler.io.rasterio.rasterio")
+def test_asset_as_band(rio):
+    """Validate use of asset as band option."""
+    rio.open = mock_rasterio_open
+
+    with STACReader(STAC_PATH) as stac:
+        img = stac.tile(71, 102, 8, assets="green", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green"]
+
+        # Can't use asset_as_band with multiple bands
+        with pytest.raises(AssetAsBandError):
+            stac.tile(71, 102, 8, assets="green", indexes=(1, 1), asset_as_band=True)
+
+        img = stac.tile(71, 102, 8, expression="green/red", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green/red"]
+
+        bbox = (-80.477, 32.7988, -79.737, 33.4453)
+        img = stac.part(bbox, assets="green", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green"]
+
+        with pytest.raises(AssetAsBandError):
+            stac.part(bbox, assets="green", indexes=(1, 1), asset_as_band=True)
+
+        img = stac.part(bbox, expression="green/red", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green/red"]
+
+        img = stac.preview(assets="green", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green"]
+
+        with pytest.raises(AssetAsBandError):
+            stac.preview(assets="green", indexes=(1, 1), asset_as_band=True)
+
+        img = stac.preview(expression="green/red", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green/red"]
+
+        pt = stac.point(-80.477, 33.4453, assets="green", asset_as_band=True)
+        assert len(pt.data) == 1
+        assert len(pt.mask) == 1
+        assert pt.band_names == ["green"]
+
+        with pytest.raises(AssetAsBandError):
+            stac.point(
+                -80.477, 33.4453, assets="green", indexes=(1, 1), asset_as_band=True
+            )
+
+        pt = stac.point(-80.477, 33.4453, expression="green/red", asset_as_band=True)
+        assert len(pt.data) == 1
+        assert pt.band_names == ["green/red"]
+
+        feat = {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [-80.013427734375, 33.03169299978312],
+                        [-80.3045654296875, 32.588477769459146],
+                        [-80.05462646484375, 32.42865847084369],
+                        [-79.45037841796875, 32.6093028087336],
+                        [-79.47235107421875, 33.43602551072033],
+                        [-79.89532470703125, 33.47956309444182],
+                        [-80.1068115234375, 33.37870592138779],
+                        [-80.30181884765625, 33.27084277265288],
+                        [-80.0628662109375, 33.146750228776455],
+                        [-80.013427734375, 33.03169299978312],
+                    ]
+                ],
+            },
+        }
+        img = stac.feature(feat, assets="green", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green"]
+
+        with pytest.raises(AssetAsBandError):
+            stac.feature(feat, assets="green", indexes=(1, 1), asset_as_band=True)
+
+        img = stac.feature(feat, expression="green/red", asset_as_band=True)
+        assert img.count == 1
+        assert img.band_names == ["green/red"]
+
+
+@patch("rio_tiler.io.rasterio.rasterio")
+def test_metadata_from_stac(rio):
+    """Make sure dataset statistics are forwarded from the raster extension."""
+    rio.open = mock_rasterio_open
+
+    with STACReader(STAC_RASTER_PATH) as stac:
+        info = stac._get_asset_info("green")
+        assert info["dataset_statistics"] == [(6883, 62785)]
+        assert info["metadata"]
+        assert "raster:bands" in info["metadata"]
+
+        img = stac.preview(assets=("green", "red"))
+        assert img.dataset_statistics == [(6883, 62785), (6101, 65035)]
+        assert img.metadata["red"]["raster:bands"]
+        assert img.metadata["green"]
+
+        img = stac.preview(expression="green_b1/red_b1")
+        assert img.dataset_statistics == [(6883 / 65035, 62785 / 6101)]
+        assert img.metadata["red"]["raster:bands"]
+        assert img.metadata["green"]

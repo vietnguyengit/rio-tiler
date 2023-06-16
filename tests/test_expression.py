@@ -1,5 +1,7 @@
 """test rio_tiler.expression functions."""
 
+import warnings
+
 import numpy
 import pytest
 
@@ -13,9 +15,9 @@ from rio_tiler.expression import (
 @pytest.mark.parametrize(
     "expr,expected",
     [
-        ("b1,b2", [1, 2]),
-        ("B1,b2", [1, 2]),
-        ("B1,B2", [1, 2]),
+        ("b1;b2", [1, 2]),
+        ("B1;b2", [1, 2]),
+        ("B1;B2", [1, 2]),
         ("where((b1==1) | (b1 > 0.5),1,0);", [1]),
     ],
 )
@@ -27,9 +29,9 @@ def test_parse(expr, expected):
 @pytest.mark.parametrize(
     "expr,expected",
     [
-        ("b1,b2", ["1", "2"]),
-        ("B1,b2", ["1", "2"]),
-        ("B1,B2", ["1", "2"]),
+        ("b1;b2", ["1", "2"]),
+        ("B1;b2", ["1", "2"]),
+        ("B1;B2", ["1", "2"]),
     ],
 )
 def test_parse_cast(expr, expected):
@@ -40,22 +42,17 @@ def test_parse_cast(expr, expected):
 @pytest.mark.parametrize(
     "expr,expected",
     [
-        ("b1,", ["b1"]),
-        ("b1,b2", ["b1", "b2"]),
-        ("where((b1==1) | (b1 > 0.5),1,0)", ["where((b1==1) | (b1 > 0.5)", "1", "0)"]),
+        ("b1", ["b1"]),
+        ("b1;", ["b1"]),
+        ("b1;b2", ["b1", "b2"]),
         ("where((b1==1) | (b1 > 0.5),1,0);", ["where((b1==1) | (b1 > 0.5),1,0)"]),
     ],
 )
 def test_get_blocks(expr, expected):
     """test get_expression_blocks."""
-    with pytest.warns(None):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         assert get_expression_blocks(expr) == expected
-
-
-def test_get_blocks_warn():
-    """test get_expression_blocks."""
-    with pytest.warns(DeprecationWarning):
-        assert get_expression_blocks("b1,b2")
 
 
 def test_apply_expression():

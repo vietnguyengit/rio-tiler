@@ -71,3 +71,11 @@ class InvalidColorFormat(RioTilerError):
 
 class InvalidDatatypeWarning(UserWarning):
     """Invalid Output Datatype."""
+
+
+class AssetAsBandError(RioTilerError):
+    """Can't use asset_as_band with multiple bands."""
+
+
+class InvalidPointDataError(RioTilerError):
+    """Invalid PointData."""

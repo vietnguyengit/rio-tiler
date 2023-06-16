@@ -1,6 +1,5 @@
 """rio_tiler.utils: utility functions."""
 
-import os
 import warnings
 from io import BytesIO
 from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple, Union
@@ -8,11 +7,11 @@ from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple, Union
 import numpy
 import rasterio
 from affine import Affine
-from boto3.session import Session as boto3_session
 from rasterio import windows
 from rasterio.crs import CRS
 from rasterio.dtypes import _gdal_typename
 from rasterio.enums import ColorInterp, MaskFlags, Resampling
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.features import is_valid_geom
 from rasterio.io import DatasetReader, DatasetWriter, MemoryFile
 from rasterio.rio.helpers import coords
@@ -23,8 +22,7 @@ from rasterio.warp import calculate_default_transform, transform_geom
 from rio_tiler.colormap import apply_cmap
 from rio_tiler.constants import WEB_MERCATOR_CRS
 from rio_tiler.errors import RioTilerError
-from rio_tiler.expression import get_expression_blocks
-from rio_tiler.types import BBox, ColorMapType, IntervalTuple
+from rio_tiler.types import BBox, ColorMapType, IntervalTuple, RIOResampling
 
 
 def _chunks(my_list: Sequence, chuck_size: int) -> Generator[Sequence, None, None]:
@@ -33,64 +31,11 @@ def _chunks(my_list: Sequence, chuck_size: int) -> Generator[Sequence, None, Non
         yield my_list[i : i + chuck_size]
 
 
-def aws_get_object(
-    bucket: str,
-    key: str,
-    request_pays: bool = False,
-    client: boto3_session.client = None,
-) -> bytes:
-    """AWS s3 get object content."""
-    if not client:
-        session = boto3_session()
-        # AWS_S3_ENDPOINT and AWS_HTTPS are GDAL config options of vsis3 driver
-        # https://gdal.org/user/virtual_file_systems.html#vsis3-aws-s3-files
-        endpoint_url = os.environ.get("AWS_S3_ENDPOINT", None)
-        if endpoint_url is not None:
-            use_https = os.environ.get("AWS_HTTPS", "YES")
-            if use_https.upper() in ["YES", "TRUE", "ON"]:
-                endpoint_url = "https://" + endpoint_url
-            else:
-                endpoint_url = "http://" + endpoint_url
-        client = session.client("s3", endpoint_url=endpoint_url)
-
-    params = {"Bucket": bucket, "Key": key}
-    if request_pays or os.environ.get("AWS_REQUEST_PAYER", "").lower() == "requester":
-        params["RequestPayer"] = "requester"
-
-    response = client.get_object(**params)
-    return response["Body"].read()
-
-
-def get_bands_names(
-    indexes: Optional[Sequence[int]] = None,
-    expression: Optional[str] = None,
-    count: Optional[int] = None,
-) -> List[str]:
-    """Define bands names based on expression, indexes or band count."""
-    warnings.warn(
-        "`get_bands_names` is deprecated, and will be removed in rio-tiler 4.0`.",
-        DeprecationWarning,
-    )
-    if expression:
-        return get_expression_blocks(expression)
-
-    elif indexes:
-        return [str(idx) for idx in indexes]
-
-    elif count:
-        return [str(idx + 1) for idx in range(count)]
-
-    else:
-        raise ValueError(
-            "one of expression or indexes or count must be passed to define band names."
-        )
-
-
 def get_array_statistics(
     data: numpy.ma.MaskedArray,
     categorical: bool = False,
     categories: Optional[List[float]] = None,
-    percentiles: List[int] = [2, 98],
+    percentiles: Optional[List[int]] = None,
     **kwargs: Any,
 ) -> List[Dict[Any, Any]]:
     """Calculate per band array statistics.
@@ -133,6 +78,8 @@ def get_array_statistics(
         ]
 
     """
+    percentiles = percentiles or [2, 98]
+
     if len(data.shape) < 3:
         data = numpy.expand_dims(data, axis=0)
 
@@ -167,9 +114,12 @@ def get_array_statistics(
             h_counts, h_keys = numpy.histogram(data[b].compressed(), **kwargs)
             histogram = [h_counts.tolist(), h_keys.tolist()]
 
-        percentiles_values = numpy.percentile(
-            data[b].compressed(), percentiles
-        ).tolist()
+        if valid_pixels:
+            percentiles_values = numpy.percentile(
+                data[b].compressed(), percentiles
+            ).tolist()
+        else:
+            percentiles_values = (numpy.nan,) * len(percentiles_names)
 
         output.append(
             {
@@ -180,8 +130,12 @@ def get_array_statistics(
                 "sum": float(data[b].sum()),
                 "std": float(data[b].std()),
                 "median": float(numpy.ma.median(data[b])),
-                "majority": float(keys[counts.tolist().index(counts.max())].tolist()),
-                "minority": float(keys[counts.tolist().index(counts.min())].tolist()),
+                "majority": float(keys[counts.tolist().index(counts.max())].tolist())
+                if valid_pixels
+                else numpy.nan,
+                "minority": float(keys[counts.tolist().index(counts.min())].tolist())
+                if valid_pixels
+                else numpy.nan,
                 "unique": float(counts.size),
                 **dict(zip(percentiles_names, percentiles_values)),
                 "histogram": histogram,
@@ -233,13 +187,17 @@ def get_overview_level(
     if target_res > src_res:
         res = [src_res * decim for decim in src_dst.overviews(1)]
 
-        for ovr_idx in range(ovr_idx, len(res) - 1):
+        for idx in range(ovr_idx, len(res) - 1):
+            ovr_idx = idx
             ovrRes = src_res if ovr_idx < 0 else res[ovr_idx]
             nextRes = res[ovr_idx + 1]
+
             if (ovrRes < target_res) and (nextRes > target_res):
                 break
+
             if abs(ovrRes - target_res) < 1e-1:
                 break
+
         else:
             ovr_idx = len(res) - 1
 
@@ -429,8 +387,8 @@ def render(
         bytes: image body.
 
     Examples:
-        >>> with COGReader("my_tif.tif") as cog:
-            img = cog.preview()
+        >>> with Reader("my_tif.tif") as src:
+            img = src.preview()
             with open('test.jpg', 'wb') as f:
                 f.write(render(img.data, img.mask, img_format="jpeg"))
 
@@ -443,16 +401,18 @@ def render(
 
     if colormap:
         data, alpha = apply_cmap(data, colormap)
+        # We take both the input mask and the alpha from the colormap
+        # if input mask is not provided then we assume output is wanted without alpha band
+        # this can be seen as a bug but at the time of writing we assume it's a feature.
         if mask is not None:
-            mask = (
-                mask * alpha * 255
-            )  # This is a special case when we want to mask some valid data
+            mask = numpy.bitwise_and(alpha, mask)
 
     # WEBP doesn't support 1band dataset so we must hack to create a RGB dataset
     if img_format == "WEBP" and data.shape[0] == 1:
         data = numpy.repeat(data, 3, axis=0)
 
     if img_format == "PNG" and data.dtype == "uint16" and mask is not None:
+        # By rio-tiler design, mask should always be between 0 and 255
         mask = linear_rescale(mask, (0, 255), (0, 65535)).astype("uint16")
 
     elif img_format == "JPEG":
@@ -474,28 +434,35 @@ def render(
                 numpy.savez_compressed(bio, data=data, mask=mask)
             else:
                 numpy.savez_compressed(bio, data=data)
+
             return bio.getvalue()
 
     count, height, width = data.shape
 
-    output_profile = dict(
-        driver=img_format,
-        dtype=data.dtype,
-        count=count + 1 if mask is not None else count,
-        height=height,
-        width=width,
-    )
+    output_profile = {
+        "driver": img_format,
+        "dtype": data.dtype,
+        "count": count + 1 if mask is not None else count,
+        "height": height,
+        "width": width,
+    }
     output_profile.update(creation_options)
 
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", rasterio.errors.NotGeoreferencedWarning)
+        warnings.filterwarnings(
+            "ignore",
+            category=NotGeoreferencedWarning,
+            module="rasterio",
+        )
         with MemoryFile() as memfile:
             with memfile.open(**output_profile) as dst:
                 dst.write(data, indexes=list(range(1, count + 1)))
+
                 # Use Mask as an alpha band
                 if mask is not None:
                     if ColorInterp.alpha not in dst.colorinterp:
                         dst.colorinterp = *dst.colorinterp[:-1], ColorInterp.alpha
+
                     dst.write(mask.astype(data.dtype), indexes=count + 1)
 
             return memfile.read()
@@ -550,8 +517,6 @@ def _convert_to_raster_space(
     for point in poly_coordinates:
         xs, ys = zip(*coords(point))
         src_y, src_x = rowcol(src_dst.transform, xs, ys)
-        src_x = [max(0, min(src_dst.width, x)) for x in src_x]
-        src_y = [max(0, min(src_dst.height, y)) for y in src_y]
         polygon = ", ".join([f"{x} {y}" for x, y in list(zip(src_x, src_y))])
         polygons.append(f"({polygon})")
 
@@ -576,12 +541,7 @@ def create_cutline(
         str: WKT geometry in form of `POLYGON ((x y, x y, ...)))
 
     """
-    if "geometry" in geometry:
-        geometry = geometry["geometry"]
-
-    if not is_valid_geom(geometry):
-        raise RioTilerError("Invalid geometry")
-
+    geometry = _validate_shape_input(geometry)
     geom_type = geometry["type"]
 
     if geometry_crs:
@@ -607,31 +567,21 @@ def create_cutline(
     return wkt
 
 
-def resize_array(
-    data: numpy.ndarray,
-    height: int,
-    width: int,
-    resampling_method: Resampling = "nearest",
-) -> numpy.ndarray:
-    """resize array to a given height and width."""
-    out_shape: Union[Tuple[int, int], Tuple[int, int, int]]
+def _array_gdal_name(data: numpy.ndarray) -> str:
+    """Return GDAL MEM dataset name."""
     if len(data.shape) == 2:
         count = 1
-        h = data.shape[0]
-        w = data.shape[1]
-        out_shape = (height, width)
+        height = data.shape[0]
+        width = data.shape[1]
     else:
         count = data.shape[0]
-        h = data.shape[1]
-        w = data.shape[2]
-        out_shape = (count, height, width)
+        height = data.shape[1]
+        width = data.shape[2]
 
-    # We are using GDAL MEM driver to create a new dataset from the numpy array
-    # https://github.com/rasterio/rasterio/blob/824a8dc40dd3475c3bfdcafc42d18f1c63c02f28/rasterio/_io.pyx#L2025-L2097
     info = {
         "DATAPOINTER": data.__array_interface__["data"][0],
-        "PIXELS": w,
-        "LINES": h,
+        "PIXELS": width,
+        "LINES": height,
         "BANDS": count,
         "DATATYPE": _gdal_typename(data.dtype.name),
     }
@@ -648,9 +598,29 @@ def resize_array(
             )
 
     dataset_options = ",".join(f"{name}={val}" for name, val in info.items())
-    datasetname = f"MEM:::{dataset_options}"
+    return f"MEM:::{dataset_options}"
+
+
+def resize_array(
+    data: numpy.ndarray,
+    height: int,
+    width: int,
+    resampling_method: RIOResampling = "nearest",
+) -> numpy.ndarray:
+    """resize array to a given height and width."""
+    out_shape: Union[Tuple[int, int], Tuple[int, int, int]]
+    if len(data.shape) == 2:
+        out_shape = (height, width)
+    else:
+        out_shape = (data.shape[0], height, width)
+
+    datasetname = _array_gdal_name(data)
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", rasterio.errors.NotGeoreferencedWarning)
+        warnings.filterwarnings(
+            "ignore",
+            category=NotGeoreferencedWarning,
+            module="rasterio",
+        )
         with rasterio.open(datasetname, "r+") as src:
             # if a 2D array is passed, using indexes=1 makes sure we return an 2D array
             indexes = 1 if len(data.shape) == 2 else None
@@ -669,3 +639,15 @@ def normalize_bounds(bounds: BBox) -> BBox:
         max(bounds[0], bounds[2]),
         max(bounds[1], bounds[3]),
     )
+
+
+def _validate_shape_input(shape: Dict) -> Dict:
+    """Ensure input shape is valid and reduce features to geometry"""
+
+    if "geometry" in shape:
+        shape = shape["geometry"]
+
+    if not is_valid_geom(shape):
+        raise RioTilerError("Invalid geometry")
+
+    return shape

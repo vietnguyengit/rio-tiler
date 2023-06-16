@@ -34,6 +34,7 @@ PIX4D_PATH = os.path.join(S3_LOCAL, KEY_PIX4D)
 COG_DST = os.path.join(os.path.dirname(__file__), "fixtures", "cog_name.tif")
 COG_WEB_TILED = os.path.join(os.path.dirname(__file__), "fixtures", "web.tif")
 COG_NOWEB = os.path.join(os.path.dirname(__file__), "fixtures", "noweb.tif")
+COG_RGB = os.path.join(os.path.dirname(__file__), "fixtures", "cog_rgb.tif")
 NOCOG = os.path.join(os.path.dirname(__file__), "fixtures", "nocog.tif")
 COGEO = os.path.join(os.path.dirname(__file__), "fixtures", "cog.tif")
 COG_CMAP = os.path.join(os.path.dirname(__file__), "fixtures", "cog_cmap.tif")
@@ -283,15 +284,15 @@ def test_cutline():
 
     feature_bounds = featureBounds(feat)
 
-    with Reader(COGEO) as cog:
-        cutline = utils.create_cutline(cog.dataset, feat, geometry_crs="epsg:4326")
-        data, mask = cog.part(feature_bounds, vrt_options={"cutline": cutline})
+    with Reader(COGEO) as src:
+        cutline = utils.create_cutline(src.dataset, feat, geometry_crs="epsg:4326")
+        data, mask = src.part(feature_bounds, vrt_options={"cutline": cutline})
         assert not mask.all()
 
         cutline = utils.create_cutline(
-            cog.dataset, feat["geometry"], geometry_crs="epsg:4326"
+            src.dataset, feat["geometry"], geometry_crs="epsg:4326"
         )
-        data, mask = cog.part(feature_bounds, vrt_options={"cutline": cutline})
+        data, mask = src.part(feature_bounds, vrt_options={"cutline": cutline})
         assert not mask.all()
 
     feat_line = {
@@ -308,9 +309,9 @@ def test_cutline():
         },
     }
 
-    with Reader(COGEO) as cog:
+    with Reader(COGEO) as src:
         with pytest.raises(RioTilerError):
-            utils.create_cutline(cog.dataset, feat_line, geometry_crs="epsg:4326")
+            utils.create_cutline(src.dataset, feat_line, geometry_crs="epsg:4326")
 
     feat_mp = {
         "type": "MultiPolygon",
@@ -336,8 +337,8 @@ def test_cutline():
         ],
     }
 
-    with Reader(COGEO) as cog:
-        c = utils.create_cutline(cog.dataset, feat_mp, geometry_crs="epsg:4326")
+    with Reader(COGEO) as src:
+        c = utils.create_cutline(src.dataset, feat_mp, geometry_crs="epsg:4326")
         assert "MULTIPOLYGON" in c
 
     bad_poly = {
@@ -355,9 +356,33 @@ def test_cutline():
         ],
     }
 
-    with Reader(COGEO) as cog:
+    with Reader(COGEO) as src:
         with pytest.raises(RioTilerError):
-            utils.create_cutline(cog.dataset, bad_poly, geometry_crs="epsg:4326")
+            utils.create_cutline(src.dataset, bad_poly, geometry_crs="epsg:4326")
+
+    triangle_over_image_edge = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [-104.775390888988852, 38.953714348778355],
+                [-104.775146720379681, 38.953580769848777],
+                [-104.775389629827075, 38.953472856486307],
+                [-104.775390888988852, 38.953714348778355],
+            ]
+        ],
+    }
+
+    # Check when using `boundless cutline`
+    # https://github.com/cogeotiff/rio-tiler/issues/585
+    triangle_bounds = featureBounds(triangle_over_image_edge)
+    with Reader(COG_RGB) as src:
+        cutline = utils.create_cutline(
+            src.dataset, triangle_over_image_edge, geometry_crs="epsg:4326"
+        )
+        data, mask = src.part(triangle_bounds, vrt_options={"cutline": cutline})
+        assert sum(mask[:, 0]) == 0  # first column
+        assert sum(mask[0, :]) == 0  # first line
+        assert sum(mask[-1, :]) == 0  # last line
 
 
 def test_parse_expression():
@@ -403,25 +428,14 @@ def test_render_numpy():
     np.array_equal(mask, arr_res["mask"])
 
 
-def test_get_bands_names():
-    """should return correct list of bands names."""
-    b = utils.get_bands_names(indexes=[1, 2, 3], expression=None, count=None)
-    assert b == ["1", "2", "3"]
-
-    # band names should be created from expression first
-    with pytest.warns(DeprecationWarning):
-        b = utils.get_bands_names(indexes=[1, 2, 3], expression="b3,b2,b1", count=None)
-        assert b == ["b3", "b2", "b1"]
-
-    # if not indexes nor expression create band names from count
-    b = utils.get_bands_names(indexes=None, expression=None, count=1)
-    assert b == ["1"]
-
-
 def test_get_array_statistics():
     """Should return a valid dict with array statistics."""
     with rasterio.open(COGEO) as src:
-        arr = src.read(indexes=[1], masked=True)
+        arr = src.read(
+            indexes=[1],
+            masked=True,
+            out_shape=(src.count, int(src.height / 10), int(src.width / 10)),
+        )
 
     stats = utils.get_array_statistics(arr)
     assert len(stats) == 1
@@ -450,7 +464,10 @@ def test_get_array_statistics():
     assert "percentile_4" in stats[0]
 
     with rasterio.open(COG_CMAP) as src:
-        arr = src.read(masked=True)
+        arr = src.read(
+            masked=True,
+            out_shape=(src.count, int(src.height / 10), int(src.width / 10)),
+        )
 
     stats = utils.get_array_statistics(arr, categorical=True)
     assert len(stats) == 1
@@ -472,7 +489,10 @@ def test_get_array_statistics():
 
     # COG_NAN has nodata value set to 0.0 but also contains NaN values
     with rasterio.open(COG_NAN) as src:
-        arr = src.read(masked=True)
+        arr = src.read(
+            masked=True,
+            out_shape=(src.count, int(src.height / 10), int(src.width / 10)),
+        )
     stats = utils.get_array_statistics(arr)
     assert not math.isnan(stats[0]["min"])
     assert not math.isnan(stats[0]["max"])

@@ -98,6 +98,7 @@ def test_tile_read_valid():
 
 
 def test_resampling_returns_different_results():
+    """Make sure resampling works."""
     bounds = [
         -6574807.42497772,
         12210356.646387195,
@@ -116,8 +117,20 @@ def test_resampling_returns_different_results():
             dst_crs=constants.WEB_MERCATOR_CRS,
             resampling_method="bilinear",
         )
+        assert not numpy.array_equal(arr, arr2)
 
-    assert not numpy.array_equal(arr, arr2)
+        arr, _ = reader.part(
+            src_dst, bounds, 16, 16, dst_crs=constants.WEB_MERCATOR_CRS
+        )
+        arr2, _ = reader.part(
+            src_dst,
+            bounds,
+            16,
+            16,
+            dst_crs=constants.WEB_MERCATOR_CRS,
+            reproject_method="bilinear",
+        )
+        assert not numpy.array_equal(arr, arr2)
 
 
 def test_resampling_with_diff_padding_returns_different_results():
@@ -361,7 +374,7 @@ def test_tile_read_vrt_option():
             bounds,
             tilesize,
             tilesize,
-            vrt_options=dict(source_extra=10, num_threads=10),
+            vrt_options={"source_extra": 10, "num_threads": 10},
         )
     assert arr.shape == (1, 16, 16)
     assert mask.shape == (16, 16)

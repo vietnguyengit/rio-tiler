@@ -1,7 +1,220 @@
 
-## Next (TBD)
+# 5.0.0 (2023-06-01)
+
+- Fix potential issue when getting statistics for non-valid data
+
+- add `rio-tiler.mosaic.methods.PixelSelectionMethod` enums with all defaults methods
+
+- Add `rio-tiler.utils._validate_shape_input` function to check geojson feature inputs
+
+- Change cutline handling in the `rio-tiler.io.rasterio.Reader.feature` method. Feature
+  cutlines are now rasterized into numpy arrays and applied as masks instead of using
+  the cutline vrt_option. These masks are tracked in the `rio-tiler.models.ImageData.cutline_mask`
+  attribute, which are used in `rio-tiler.mosaic.methods.base.MosaicMethodBase` to stop
+  mosaic building as soon as all pixels in a feature are populated
+
+- Fix missing `nodata/alpha/mask` forwarding for dataset with internal GCPS
+
+- in `rio_tiler.io.XarrayReader`, add `auto_expand` options to avoid returning 1D array (incompatible with rio-tiler) (author @abarciauskas-bgse, https://github.com/cogeotiff/rio-tiler/pull/608)
+
+- handle internal and user provided `nodata` values in `rio_tiler.io.XarrayReader` to create mask
+
+- add `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE` and `AWS_REGION` environnement overrides for `rio_tiler.io.stac.aws_get_object` function
+
+**breaking changes**
+
+- remove support for non-binary mask values (e.g non-binary alpha bands, ref: [rasterio/rasterio#1721](https://github.com/rasterio/rasterio/issues/1721#issuecomment-586547617))
+
+- switch from PER-DATASET to PER-BAND mask (https://github.com/cogeotiff/rio-tiler/pull/580)
+
+    ```python
+    # before
+    with COGReader("cog.tif") as src:
+        img = src.preview(width=128, height=128, max_size=None)
+        assert img.data.shape == (3, 128, 128)
+        assert img.mask.shape == (128, 128)
+
+    # now
+    with COGReader("cog.tif") as src:
+        img = src.preview(width=128, height=128, max_size=None)
+        assert isinstance(img.array, numpy.ma.MaskedArray)
+        assert img.array.data.shape == (3, 128, 128)
+        assert img.array.mask.shape == (3, 128, 128))
+    ```
+
+- use numpy masked array in ImageData and PointData to store the data
+
+    ```python
+    # before
+    arr = numpy.zeros((1, 256, 256), dtype="uint16")
+    img = ImageData(arr)
+    assert isintance(img.data, numpy.ndarray)  # Attribute
+
+    # now
+    arr = numpy.zeros((1, 256, 256), dtype="uint16")
+    img = ImageData(arr)
+    assert isintance(img.array, numpy.ma.MaskedArray)  # Attribute
+    assert isintance(img.data, numpy.ndarray)  # property
+    assert isintance(img.mask, numpy.ndarray)  # property
+    ```
+
+- remove `ImageData.from_array` method (because we now support MaskedArray directly)
+
+- `rio_tiler.expression.apply_expression` input/output type change to `numpy.ma.MaskedArray`
+
+- rio-tiler `mosaic` methods return `numpy.ma.MaskedArray`
+
+- reader's `post_process` should be a Callable with `numpy.ma.MaskedArray` input/output
+
+- add `reproject_method` option in `rio_tiler.reader`'s method to select the `resampling` method used during reprojection
+
+    ```python
+    # before
+    with Reader("cog.tif") as src:
+        im = src.preview(
+            dst_crs="epsg:4326",
+            resampling_method="bilinear",  # use `bilinear` for both resizing and reprojection
+        )
+
+    # now
+    with Reader("cog.tif") as src:
+        im = src.preview(
+            dst_crs="epsg:4326",
+            resampling_method="cubic",  # use `cubic` for resizing
+            reproject_method="bilinear",  # use `bilinear` for reprojection
+        )
+    ```
+
+- refactored the `MosaicMethodBase` to use python's dataclass
+
+- changed variable names in `MosaicMethodBase` (`tile` -> `mosaic`)
+
+- `rio_tiler.mosaic.methods.defaults.LastBandHigh` renamed `LastBandHighMethod`
+
+- `rio_tiler.mosaic.methods.defaults.LastBandLow` renamed `LastBandLowMethod`
+
+- move `aws_get_object` from `rio_tiler.utils` to `rio_tiler.io.stac`
+
+- make `boto3` an optional dependency (`python -m pip install rio-tiler["s3"]`)
+
+- update `morecantile` dependency to `>=4.0`
+
+- add `metadata` in ImageData/PointData from rasterio dataset `tags`
+
+- forward statistics from the **raster STAC extension** to the ImageData object
+
+    ```python
+    with STACReader(STAC_RASTER_PATH) as stac:
+        info = stac._get_asset_info("green")
+        assert info["dataset_statistics"] == [(6883, 62785)]
+        assert info["metadata"]
+        assert "raster:bands" in info["metadata"]
+
+        img = stac.preview(assets=("green", "red"))
+        assert img.dataset_statistics == [(6883, 62785), (6101, 65035)]
+        assert img.metadata["green"]  # extra_fields from the STAC assets (e.g `"raster:bands"`)
+        assert img.metadata["red"]
+    ```
+
+- add Deprecation warning for `ImageData.from_array`, `ImageData.as_masked`, `PointData.as_masked` methods
+
+# 4.1.11 (2023-05-18)
+
+* in `rio_tiler.io.XarrayReader`, add `auto_expand` options to avoid returning 1D array (incompatible with rio-tiler) (author @abarciauskas-bgse, https://github.com/cogeotiff/rio-tiler/pull/608)
+
+# 4.1.10 (2023-03-24)
+
+* enable `boundless` geometry for cutline (author @yellowcap, https://github.com/cogeotiff/rio-tiler/pull/586)
+
+# 4.1.9 (2023-02-28)
+
+* Automatically expand 2D numpy array to 3D when creating ImageData
+
+# 4.1.8 (2023-02-15)
+
+* Fix dtype issue when working with Mosaics Methods. Mask should always been of type `Uint8`.
+* Fix `ImageData.from_array` method when working with Masked array
+
+# 4.1.7 (2023-02-07)
+
+* add `from_array` and `from_bytes` ImageData creation methods
+* add `statistics` method to ImageData
+
+# 4.1.6 (2023-01-18)
+
+* add `apply_colormap` method to the ImageData class
+* fix potential datatype overflow when calculating the intersection of mask and alpha band when using Colormap
+
+# 4.1.5 (2022-12-20)
+
+* Fix inverted col/row check when doing window read of a non WarpedVRT dataset
+
+# 4.1.4 (2022-12-16)
+
+* add `rio_tiler.mosaic.mosaic_point_reader` function to create Point value from multiple observation
+    ```python
+    def reader(asset: str, *args, **kwargs) -> PointData:
+        with Reader(asset) as src:
+            return src.point(*args, **kwargs)
+
+    pt: PointData = mosaic_point_reader(["cog.tif", "cog2.tif"], reader, 0, 0)
+    ```
+
+# 4.1.3 (2022-12-15)
+
+* fix invalid definition of `PointData.mask` when mask is not provided. Makes sure it's a one element array.
+
+# 4.1.2 (2022-12-15)
+
+* raise `InvalidPointDataError` error when trying to create PointData from an empty list in `PointData.create_from_list`
+
+# 4.1.1 (2022-12-12)
+
+* fix invalid coordinates slicing for `XArrayReader.point()` method (author @benjaminleighton, https://github.com/cogeotiff/rio-tiler/pull/559)
+
+# 4.1.0 (2022-11-24)
+
+* add `asset_as_band` option in `MultiBaseReader` tile, part, preview, feature and point methods
+
+```python
+with STACReader(STAC_PATH) as stac:
+    img = stac.tile(71, 102, 8, assets="green")
+    assert img.band_names == ["green_b1"]
+
+with STACReader(STAC_PATH) as stac:
+    img = stac.tile(71, 102, 8, assets="green", asset_as_band=True)
+    assert img.band_names == ["green"]
+
+# For expression, without `asset_as_band` tag, users have to pass `_b{n}` suffix to indicate the band index
+with STACReader(STAC_PATH) as stac:
+    img = stac.tile(71, 102, 8, expression="green_b1/red_b1")
+    assert img.band_names == ["green_b1/red_b1"]
+
+with STACReader(STAC_PATH) as stac:
+    img = stac.tile(71, 102, 8, expression="green/red", asset_as_band=True)
+    assert img.band_names == ["green/red"]
+```
+
+# 4.0.0 (2022-11-21)
+
+* remove deprecated code
+  * `asset_expression` in MultiBaseReader
+  * `GCPCOGReader`
+
+# 4.0.0a2 (2022-11-15)
+
+* use of `file:header_size` extension in `STACReader` to set `GDAL_INGESTED_BYTES_AT_OPEN` environment variable
+
+**breaking changes**
+
+* renamed `MultiBaseReader._get_asset_url` to `MultiBaseReader._get_asset_info` and change the output to return a dictionary in form of `{"url": ..., "env": ...}`
+
+# 4.0.0a1 (2022-11-10)
 
 * assign ColorInterp.alpha to rendered image when we add the mask band
+* add `.clip(bbox: BBox)` and `.resize(height: int, width: int)` methods to ImageData object
+* add python 3.11 support
+* replace `rio-color` by `color-operations` module
 
 # 4.0.0a0 (2022-10-20)
 

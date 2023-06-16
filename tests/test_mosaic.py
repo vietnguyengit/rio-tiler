@@ -6,15 +6,15 @@ from unittest.mock import patch
 import numpy
 import pytest
 import rasterio
+from rasterio.crs import CRS
 from rasterio.warp import transform_bounds
 
 from rio_tiler import mosaic
 from rio_tiler.constants import WEB_MERCATOR_TMS, WGS84_CRS
 from rio_tiler.errors import EmptyMosaicError, InvalidMosaicMethod, TileOutsideBounds
 from rio_tiler.io import Reader, STACReader
-from rio_tiler.models import ImageData
+from rio_tiler.models import ImageData, PointData
 from rio_tiler.mosaic.methods import defaults
-from rio_tiler.types import DataMaskType
 
 asset1 = os.path.join(os.path.dirname(__file__), "fixtures", "mosaic_cog1.tif")
 asset2 = os.path.join(os.path.dirname(__file__), "fixtures", "mosaic_cog2.tif")
@@ -41,21 +41,32 @@ zo = 9
 
 def _read_tile(src_path: str, *args, **kwargs) -> ImageData:
     """Read tile from an asset"""
-    with Reader(src_path) as cog:
-        return cog.tile(*args, **kwargs)
+    with Reader(src_path) as src:
+        return src.tile(*args, **kwargs)
 
 
 def _read_part(src_path: str, *args, **kwargs) -> ImageData:
     """Read part from an asset"""
-    with Reader(src_path) as cog:
-        return cog.part(*args, **kwargs)
+    with Reader(src_path) as src:
+        return src.part(*args, **kwargs)
 
 
-def _read_preview(src_path: str, *args, **kwargs) -> DataMaskType:
+def _read_preview(src_path: str, *args, **kwargs) -> ImageData:
     """Read preview from an asset"""
-    with Reader(src_path) as cog:
-        data, mask = cog.preview(*args, **kwargs)
-    return data, mask
+    with Reader(src_path) as src:
+        return src.preview(*args, **kwargs)
+
+
+def _read_point(src_path: str, *args, **kwargs) -> PointData:
+    """Read point from an asset"""
+    with Reader(src_path) as src:
+        return src.point(*args, **kwargs)
+
+
+def _read_feature(src_path: str, *args, **kwargs) -> ImageData:
+    """Read feature from an asset"""
+    with Reader(src_path) as src:
+        return src.feature(*args, **kwargs)
 
 
 def test_mosaic_tiler():
@@ -66,7 +77,8 @@ def test_mosaic_tiler():
     assert m.shape == (256, 256)
     assert m.all()
     assert t[0][-1][-1] == 8682
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     img, _ = mosaic.mosaic_reader(assets, _read_tile, x, y, z)
     assert img.band_names == ["b1", "b2", "b3"]
@@ -84,7 +96,8 @@ def test_mosaic_tiler():
     assert m.shape == (256, 256)
     assert m.all()
     assert t[0][-1][-1] == 8057
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     (t, m), _ = mosaic.mosaic_reader(assets, _read_tile, x, y, z, indexes=1)
     assert t.shape == (1, 256, 256)
@@ -92,7 +105,8 @@ def test_mosaic_tiler():
     assert t.all()
     assert m.all()
     assert t[0][-1][-1] == 8682
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     # Test darkest pixel selection
     (t, m), assets_used = mosaic.mosaic_reader(
@@ -101,13 +115,15 @@ def test_mosaic_tiler():
     assert len(assets_used) == 2
     assert m.all()
     assert t[0][-1][-1] == 8057
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     (to, mo), _ = mosaic.mosaic_reader(
         assets_order, _read_tile, x, y, z, pixel_selection=defaults.LowestMethod()
     )
     numpy.testing.assert_array_equal(t[0, m], to[0, mo])
-    assert to.dtype == mo.dtype
+    assert to.dtype == "uint16"
+    assert mo.dtype == "uint8"
 
     # Test brightest pixel selection
     (t, m), _ = mosaic.mosaic_reader(
@@ -115,14 +131,16 @@ def test_mosaic_tiler():
     )
     assert m.all()
     assert t[0][-1][-1] == 8682
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     (to, mo), _ = mosaic.mosaic_reader(
         assets_order, _read_tile, x, y, z, pixel_selection=defaults.HighestMethod()
     )
     numpy.testing.assert_array_equal(to, t)
     numpy.testing.assert_array_equal(mo, m)
-    assert to.dtype == mo.dtype
+    assert to.dtype == "uint16"
+    assert mo.dtype == "uint8"
 
     # test with default and partially covered tile
     (t, m), _ = mosaic.mosaic_reader(
@@ -130,7 +148,8 @@ def test_mosaic_tiler():
     )
     assert t.any()
     assert not m.all()
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     # test when tiler raise errors (outside bounds)
     with pytest.raises(EmptyMosaicError):
@@ -144,7 +163,8 @@ def test_mosaic_tiler():
     assert m.shape == (256, 256)
     assert m.all()
     assert t[0][-1][-1] == 8369
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     # Test mean pixel selection
     (t, m), _ = mosaic.mosaic_reader(
@@ -157,7 +177,8 @@ def test_mosaic_tiler():
     )
     assert m.all()
     assert t[0][-1][-1] == 8369.5
-    assert t.dtype == m.dtype
+    assert t.dtype == "float64"
+    assert m.dtype == "uint8"
 
     # Test median pixel selection
     (t, m), _ = mosaic.mosaic_reader(
@@ -167,7 +188,8 @@ def test_mosaic_tiler():
     assert m.shape == (256, 256)
     assert m.all()
     assert t[0][-1][-1] == 8369
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     # Test median pixel selection
     (t, m), _ = mosaic.mosaic_reader(
@@ -180,7 +202,8 @@ def test_mosaic_tiler():
     )
     assert m.all()
     assert t[0][-1][-1] == 8369.5
-    assert t.dtype == m.dtype
+    assert t.dtype == "float64"
+    assert m.dtype == "uint8"
 
     (t, m), _ = mosaic.mosaic_reader(
         assets_order,
@@ -188,14 +211,15 @@ def test_mosaic_tiler():
         x,
         y,
         z,
-        pixel_selection=defaults.LastBandHigh(),
+        pixel_selection=defaults.LastBandHighMethod(),
         indexes=(1, 2, 3, 1),
     )
     assert t.shape == (3, 256, 256)
     assert m.shape == (256, 256)
     assert m.all()
     assert t[0][-1][-1] == 8682
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     (t, m), _ = mosaic.mosaic_reader(
         assets_order,
@@ -203,14 +227,15 @@ def test_mosaic_tiler():
         x,
         y,
         z,
-        pixel_selection=defaults.LastBandLow(),
+        pixel_selection=defaults.LastBandLowMethod(),
         indexes=(1, 2, 3, 1),
     )
     assert t.shape == (3, 256, 256)
     assert m.shape == (256, 256)
     assert m.all()
     assert t[0][-1][-1] == 8057
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     # Test pixel selection as _class_, not instance of class
     (t, m), assets_used = mosaic.mosaic_reader(
@@ -220,7 +245,8 @@ def test_mosaic_tiler():
     assert m.shape == (256, 256)
     assert m.all()
     assert t[0][-1][-1] == 8682
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
     # Test invalid Pixel Selection class
     with pytest.raises(InvalidMosaicMethod):
@@ -231,12 +257,15 @@ def test_mosaic_tiler():
         mosaic.mosaic_reader(assets, _read_tile, x, y, z, pixel_selection=aClass())
 
     # test with preview
-    # NOTE: We need to fix the output width and height because each preview could have different size
+    # NOTE: We need to have fix output width and height because each preview could have different size
     # Also because the 2 assets cover different bbox, getting the preview merged together doesn't make real sense
-    (t, m), _ = mosaic.mosaic_reader(assets, _read_preview, width=256, height=256)
+    (t, m), _ = mosaic.mosaic_reader(
+        assets, _read_preview, width=256, height=256, max_size=None
+    )
     assert t.shape == (3, 256, 256)
     assert m.shape == (256, 256)
-    assert t.dtype == m.dtype
+    assert t.dtype == "uint16"
+    assert m.dtype == "uint8"
 
 
 def mock_rasterio_open(asset):
@@ -403,7 +432,6 @@ def test_mosaic_tiler_with_imageDataClass():
     assert img.mask.all()
     assert img.data[0][-1][-1] == 8682
     assert len(img.assets) == 1
-
     assert img.crs == WEB_MERCATOR_TMS.crs
     assert img.bounds == WEB_MERCATOR_TMS.xy_bounds(x, y, z)
 
@@ -419,20 +447,21 @@ def test_mosaic_tiler_with_imageDataClass():
         _read_preview,
         width=256,
         height=256,
+        max_size=None,
         pixel_selection=defaults.LowestMethod(),
     )
     assert img.data.shape == (3, 256, 256)
     assert img.mask.shape == (256, 256)
     assert assets_used == img.assets == assets
-    assert not img.crs
-    assert not img.bounds
+    assert img.crs
+    assert img.bounds
 
     bbox = [-75.98703377413767, 44.93504283293786, -71.337604723999, 47.09685599202324]
-    with Reader(assets[0]) as cog:
-        crs1 = cog.dataset.crs
+    with Reader(assets[0]) as src:
+        crs1 = src.dataset.crs
 
-    with Reader(assets[0]) as cog:
-        crs2 = cog.dataset.crs
+    with Reader(assets[0]) as src:
+        crs2 = src.dataset.crs
 
     img, assets_used = mosaic.mosaic_reader(
         assets, _read_part, bbox=bbox, dst_crs=crs1, bounds_crs=WGS84_CRS, max_size=1024
@@ -446,3 +475,235 @@ def test_mosaic_tiler_with_imageDataClass():
     bbox_in_crs = transform_bounds(WGS84_CRS, crs1, *bbox, densify_pts=21)
     for xc, yc in zip(img.bounds, bbox_in_crs):
         assert round(xc, 5) == round(yc, 5)
+
+
+def test_mosaic_point():
+    """Test mosaic point."""
+    cog1 = (-75.38645768740565, 45.769670480435394)
+    both = (-73.69990294755982, 45.49950291143219)
+    cog2 = (-72.02385676824944, 46.06897125935538)
+
+    pt, _ = mosaic.mosaic_point_reader(assets, _read_point, *cog1)
+    assert pt.data.tolist() == [8405, 8378, 9198]
+    assert pt.mask.tolist() == [255]
+    assert pt.assets == [asset1]
+    assert pt.crs == WGS84_CRS
+    assert pt.coordinates == cog1
+
+    pt, _ = mosaic.mosaic_point_reader(assets, _read_point, *cog2)
+    assert pt.data.tolist() == [9141, 9786, 9457]
+    assert pt.mask.tolist() == [255]
+    assert pt.assets == [asset2]
+    assert pt.crs == WGS84_CRS
+    assert pt.coordinates == cog2
+
+    pt, _ = mosaic.mosaic_point_reader(assets, _read_point, *both)
+    assert pt.data.tolist() == [9443, 9640, 10326]
+    assert pt.mask.tolist() == [255]
+    assert pt.assets == [asset1]
+    assert pt.crs == WGS84_CRS
+    assert pt.coordinates == both
+
+    pt, _ = mosaic.mosaic_point_reader(
+        assets, _read_point, *both, pixel_selection=defaults.LowestMethod
+    )
+    assert pt.data.tolist() == [9443, 9640, 10326]
+    assert pt.mask.tolist() == [255]
+    assert pt.assets == [asset1, asset2]
+    assert pt.crs == WGS84_CRS
+    assert pt.coordinates == both
+
+    pt, _ = mosaic.mosaic_point_reader(
+        assets, _read_point, *both, pixel_selection=defaults.HighestMethod
+    )
+    assert pt.data.tolist() == [9947, 10268, 10879]
+    assert pt.mask.tolist() == [255]
+    assert pt.assets == [asset1, asset2]
+    assert pt.crs == WGS84_CRS
+    assert pt.coordinates == both
+
+    with pytest.raises(EmptyMosaicError):
+        mosaic.mosaic_point_reader(assets, _read_point, -78, 43)
+
+
+@pytest.mark.parametrize(
+    "m",
+    [
+        defaults.FirstMethod,
+        defaults.HighestMethod,
+        defaults.LowestMethod,
+        defaults.MeanMethod,
+        defaults.MedianMethod,
+        defaults.StdevMethod,
+    ],
+)
+def test_mosaic_all_methods(m):
+    """Test mosaic methods."""
+    pt, _ = mosaic.mosaic_point_reader(
+        assets, _read_point, -73.69990294755982, 45.49950291143219, pixel_selection=m
+    )
+    assert len(pt.data) == 3
+    assert len(pt.mask) == 1
+    assert len(pt.assets) > 0
+    assert pt.crs == WGS84_CRS
+    assert pt.coordinates == (-73.69990294755982, 45.49950291143219)
+
+    img, _ = mosaic.mosaic_reader(assets, _read_tile, x, y, z, pixel_selection=m)
+    assert img.data.shape == (3, 256, 256)
+    assert img.mask.shape == (256, 256)
+    assert img.mask.all()
+    assert img.crs == WEB_MERCATOR_TMS.crs
+    assert img.bounds == WEB_MERCATOR_TMS.xy_bounds(x, y, z)
+
+
+@pytest.mark.parametrize(
+    "m",
+    [
+        defaults.LastBandHighMethod,
+        defaults.LastBandLowMethod,
+    ],
+)
+def test_mosaic_methods_last(m):
+    """test LAST mosaic method."""
+    pt, _ = mosaic.mosaic_point_reader(
+        assets,
+        _read_point,
+        -73.69990294755982,
+        45.49950291143219,
+        pixel_selection=m,
+        indexes=(1, 2, 3, 3),
+    )
+    assert len(pt.data) == 3
+    assert len(pt.mask) == 1
+    assert len(pt.assets) > 0
+    assert pt.crs == WGS84_CRS
+    assert pt.coordinates == (-73.69990294755982, 45.49950291143219)
+
+    img, _ = mosaic.mosaic_reader(
+        assets, _read_tile, x, y, z, indexes=(1, 2, 3, 3), pixel_selection=m
+    )
+    assert img.data.shape == (3, 256, 256)
+    assert img.mask.shape == (256, 256)
+    assert img.mask.all()
+    assert img.crs == WEB_MERCATOR_TMS.crs
+    assert img.bounds == WEB_MERCATOR_TMS.xy_bounds(x, y, z)
+
+
+def test_mosaic_feature():
+    """Test mosaic feature."""
+    cog1 = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [479966, 5076955],
+                    [485507, 5083109],
+                    [490381, 5078849],
+                    [488014, 5073641],
+                    [479966, 5076955],
+                ]
+            ],
+        },
+    }
+    cog2 = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [700570, 5042202],
+                    [706585, 5046212],
+                    [713045, 5040643],
+                    [709035, 5036410],
+                    [700570, 5042202],
+                ]
+            ],
+        },
+    }
+    both = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [575815, 5049776],
+                [584726, 5055123],
+                [589405, 5046212],
+                [581830, 5046212],
+                [575815, 5049776],
+            ]
+        ],
+    }
+    edge = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [614608, 5021770],
+                [633407, 5021770],
+                [633407, 5030735],
+                [614608, 5030735],
+                [614608, 5021770],
+            ]
+        ],
+    }
+    away = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [900570, 5042202],
+                [906585, 5046212],
+                [913045, 5040643],
+                [909035, 5036410],
+                [900570, 5042202],
+            ]
+        ],
+    }
+    crs = CRS.from_epsg(32618)
+
+    dat, _ = mosaic.mosaic_reader(assets, _read_feature, shape=cog1, shape_crs=crs)
+    assert dat.data.shape == (3, 32, 35)
+    assert list(numpy.unique(dat.array.mask)) == [False, True]
+    assert dat.assets == [asset1]
+    assert dat.crs == crs
+
+    dat, _ = mosaic.mosaic_reader(
+        assets_order, _read_feature, shape=cog2, shape_crs=crs
+    )
+    assert dat.data.shape == (3, 33, 42)
+    assert list(numpy.unique(dat.array.mask)) == [False, True]
+    assert dat.assets == [asset2]
+    assert dat.crs == crs
+
+    dat, _ = mosaic.mosaic_reader(assets, _read_feature, shape=both, shape_crs=crs)
+    assert dat.data.shape == (3, 30, 45)
+    assert list(numpy.unique(dat.array.mask)) == [False, True]
+    assert dat.assets == [asset1]  # Covers both but finishes early
+    assert dat.crs == crs
+
+    dat, _ = mosaic.mosaic_reader(assets, _read_feature, shape=edge, shape_crs=crs)
+    assert dat.data.shape == (3, 30, 63)
+    assert list(numpy.unique(dat.array.mask)) == [
+        False
+    ]  # Squared polygon, fills all pixels
+    assert dat.assets == [
+        asset1,
+        asset2,
+    ]  # At edge of asset 1, will need asset 2 to complete
+    assert dat.crs == crs
+
+    dat, _ = mosaic.mosaic_reader(assets, _read_feature, shape=away, shape_crs=crs)
+    assert dat.data.shape == (3, 33, 42)
+    assert list(numpy.unique(dat.array.mask)) == [True]
+    assert dat.assets == [asset1, asset2]
+    assert dat.crs == crs
+
+    dat, _ = mosaic.mosaic_reader(
+        assets,
+        _read_feature,
+        shape=cog1,
+        shape_crs=crs,
+        pixel_selection=defaults.HighestMethod,
+    )
+    assert dat.data.shape == (3, 32, 35)
+    assert list(numpy.unique(dat.array.mask)) == [False, True]
+    assert dat.assets == [asset1, asset2]
+    assert dat.crs == crs

@@ -72,6 +72,22 @@ with Reader(
     >>> [("b1", ""), ("b2", ""), ("b3", "")]
 ```
 
+## MultiBaseReader `_get_asset_url`
+
+We replaced `_get_asset_url` method in `MultibaseReader` by `_get_asset_info` which should return a dictionary in form of `{"url": ..., "env": ...}` (ref: https://github.com/cogeotiff/rio-tiler/pull/552)
+
+```python
+# before
+with STACReader("stac.json") as stac:
+    print(stac._get_asset_url("green"))
+    >>> "green.tif"
+
+# new
+with STACReader("stac.json") as stac:
+    print(stac._get_asset_info("green"))
+    >>> {"url": "green.tif", "env": {}}
+```
+
 ## MultiBaseReader **Expressions**
 
 We updated the `expression` format for `MultiBaseReader` (e.g STAC) to include **band names** and not only the asset name
@@ -143,8 +159,8 @@ with COGReader("cog.tif") as cog:
     >>> [0, 0, 0]
 
 # now
-with Reader("cog.tif") as cog:
-    print(cog.point(10.20, -42.0))
+with Reader("cog.tif") as src:
+    print(src.point(10.20, -42.0))
     >>> PointData(
         data=array([3744], dtype=uint16),
         mask=array([255], dtype=uint8),
@@ -199,8 +215,8 @@ with COGReader("cog.tif", nodata=1, resampling_method="bilinear") as cog:
     data = cog.preview()
 
 # now
-with Reader(COGEO, options={"nodata": 1, "resampling_method": "bilinear"}) as cog:
-    data = cog.preview()
+with Reader(COGEO, options={"nodata": 1, "resampling_method": "bilinear"}) as src:
+    data = src.preview()
 ```
 
 ## Base classes **minzoom** and **maxzoom**

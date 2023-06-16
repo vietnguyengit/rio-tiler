@@ -1,12 +1,14 @@
 """rio_tiler.io.stac: STAC reader."""
 
 import json
+import os
 from typing import Any, Dict, Iterator, Optional, Set, Type, Union
 from urllib.parse import urlparse
 
 import attr
 import httpx
 import pystac
+import rasterio
 from cachetools import LRUCache, cached
 from cachetools.keys import hashkey
 from morecantile import TileMatrixSet
@@ -16,7 +18,14 @@ from rio_tiler.constants import WEB_MERCATOR_TMS, WGS84_CRS
 from rio_tiler.errors import InvalidAssetName, MissingAssets
 from rio_tiler.io.base import BaseReader, MultiBaseReader
 from rio_tiler.io.rasterio import Reader
-from rio_tiler.utils import aws_get_object
+from rio_tiler.types import AssetInfo
+
+try:
+    from boto3.session import Session as boto3_session
+
+except ImportError:  # pragma: nocover
+    boto3_session = None  # type: ignore
+
 
 DEFAULT_VALID_TYPE = {
     "image/tiff; application=geotiff",
@@ -32,7 +41,61 @@ DEFAULT_VALID_TYPE = {
 }
 
 
-@cached(
+def aws_get_object(
+    bucket: str,
+    key: str,
+    request_pays: bool = False,
+    client: "boto3_session.client" = None,
+) -> bytes:
+    """AWS s3 get object content."""
+    assert boto3_session is not None, "'boto3' must be installed to use s3:// urls"
+
+    if not client:
+        if profile_name := os.environ.get("AWS_PROFILE", None):
+            session = boto3_session(profile_name=profile_name)
+
+        else:
+            access_key = os.environ.get("AWS_ACCESS_KEY_ID", None)
+            secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY", None)
+            access_token = os.environ.get("AWS_SESSION_TOKEN", None)
+
+            # AWS_REGION is GDAL specific. Later overloaded by standard AWS_DEFAULT_REGION
+            region_name = os.environ.get(
+                "AWS_DEFAULT_REGION", os.environ.get("AWS_REGION", None)
+            )
+
+            session = boto3_session(
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_access_key,
+                aws_session_token=access_token,
+                region_name=region_name or None,
+            )
+
+        # AWS_S3_ENDPOINT and AWS_HTTPS are GDAL config options of vsis3 driver
+        # https://gdal.org/user/virtual_file_systems.html#vsis3-aws-s3-files
+        endpoint_url = os.environ.get("AWS_S3_ENDPOINT", None)
+        if endpoint_url:
+            use_https = os.environ.get("AWS_HTTPS", "YES")
+            if use_https.upper() in ["YES", "TRUE", "ON"]:
+                endpoint_url = "https://" + endpoint_url
+
+            else:
+                endpoint_url = "http://" + endpoint_url
+
+        client = session.client(
+            "s3",
+            endpoint_url=endpoint_url or "s3.amazonaws.com",
+        )
+
+    params = {"Bucket": bucket, "Key": key}
+    if request_pays or os.environ.get("AWS_REQUEST_PAYER", "").lower() == "requester":
+        params["RequestPayer"] = "requester"
+
+    response = client.get_object(**params)
+    return response["Body"].read()
+
+
+@cached(  # type: ignore
     LRUCache(maxsize=512),
     key=lambda filepath, **kargs: hashkey(filepath, json.dumps(kargs)),
 )
@@ -59,6 +122,7 @@ def fetch(filepath: str, **kwargs: Any) -> Dict:
         resp = httpx.get(filepath, **kwargs)
         resp.raise_for_status()
         return resp.json()
+
     else:
         with open(filepath, "r") as f:
             return json.load(f)
@@ -181,6 +245,8 @@ class STACReader(MultiBaseReader):
 
     fetch_options: Dict = attr.ib(factory=dict)
 
+    ctx: Any = attr.ib(default=rasterio.Env)
+
     def __attrs_post_init__(self):
         """Fetch STAC Item and get list of valid assets."""
         self.item = self.item or pystac.Item.from_dict(
@@ -211,7 +277,7 @@ class STACReader(MultiBaseReader):
     def _maxzoom(self):
         return self.tms.maxzoom
 
-    def _get_asset_url(self, asset: str) -> str:
+    def _get_asset_info(self, asset: str) -> AssetInfo:
         """Validate asset names and return asset's url.
 
         Args:
@@ -224,4 +290,24 @@ class STACReader(MultiBaseReader):
         if asset not in self.assets:
             raise InvalidAssetName(f"{asset} is not valid")
 
-        return self.item.assets[asset].get_absolute_href()
+        asset_info = self.item.assets[asset]
+        extras = asset_info.extra_fields
+
+        info = AssetInfo(
+            url=asset_info.get_absolute_href(),
+            metadata=extras,
+        )
+
+        if head := extras.get("file:header_size"):
+            info["env"] = {"GDAL_INGESTED_BYTES_AT_OPEN": head}
+
+        if bands := extras.get("raster:bands"):
+            stats = [
+                (b["statistics"]["minimum"], b["statistics"]["maximum"])
+                for b in bands
+                if {"minimum", "maximum"}.issubset(b.get("statistics", {}))
+            ]
+            if len(stats) == len(bands):
+                info["dataset_statistics"] = stats
+
+        return info
