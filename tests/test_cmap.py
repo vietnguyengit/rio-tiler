@@ -14,11 +14,13 @@ from rio_tiler.errors import (
     InvalidFormat,
 )
 
+colormap_number = 211
+
 
 def test_get_cmaplist(monkeypatch):
     """Should work as expected return all rio-tiler colormaps."""
     monkeypatch.delenv("COLORMAP_DIRECTORY", raising=False)
-    assert len(DEFAULT_CMAPS_FILES) == 167
+    assert len(DEFAULT_CMAPS_FILES) == colormap_number
 
 
 def test_cmapObject(monkeypatch):
@@ -26,25 +28,25 @@ def test_cmapObject(monkeypatch):
     monkeypatch.delenv("COLORMAP_DIRECTORY", raising=False)
 
     cmap = colormap.cmap
-    assert len(cmap.list()) == 167
+    assert len(cmap.list()) == colormap_number
 
     with pytest.raises(InvalidColorMapName):
         cmap.get("something")
 
     # `register()` returns a new ColorMaps Objects without modifying the original
     cmap.register({"empty": colormap.EMPTY_COLORMAP})
-    assert len(cmap.list()) == 167
-    assert len(DEFAULT_CMAPS_FILES) == 167
+    assert len(cmap.list()) == colormap_number
+    assert len(DEFAULT_CMAPS_FILES) == colormap_number
 
     # check new cmap is registered and it didn't affect the original Dict
     new_cmap = cmap.register({"empty": colormap.EMPTY_COLORMAP})
-    assert len(DEFAULT_CMAPS_FILES) == 167
-    assert len(cmap.list()) == 167
-    assert len(new_cmap.list()) == 168
+    assert len(DEFAULT_CMAPS_FILES) == colormap_number
+    assert len(cmap.list()) == colormap_number
+    assert len(new_cmap.list()) == colormap_number + 1
 
     # register multiple cmap
     new_cmap = cmap.register({"empty": colormap.EMPTY_COLORMAP, "empty2": "fake.npy"})
-    assert len(new_cmap.list()) == 169
+    assert len(new_cmap.list()) == colormap_number + 2
 
     with pytest.raises(ColorMapAlreadyRegistered):
         new_cmap.register({"empty": colormap.EMPTY_COLORMAP})
@@ -149,6 +151,9 @@ def test_apply_discrete_cmap():
     mask[2:5, 2:5] = 255
     mask[5:, 5:] = 255
     numpy.testing.assert_array_equal(m, mask)
+    dd, mm = colormap.apply_cmap(data, cm)
+    numpy.testing.assert_array_equal(dd, d)
+    numpy.testing.assert_array_equal(mm, m)
 
     data = data.astype("uint16")
     d, m = colormap.apply_discrete_cmap(data, cm)
@@ -249,3 +254,31 @@ def test_parse_color_bad():
 
     with pytest.raises(InvalidColorFormat):
         colormap.parse_color([0, 0, 0, 0, 0])
+
+
+def test_discrete_float():
+    """test for titiler issue 738."""
+    cm = {
+        0: (0, 255, 255, 255),
+        1: (83, 151, 145, 255),
+        2: (87, 194, 23, 255),
+        3: (93, 69, 255, 255),
+        4: (98, 217, 137, 255),
+        5: (140, 255, 41, 255),
+        6: (150, 110, 255, 255),
+        7: (179, 207, 100, 255),
+        8: (214, 130, 156, 255),
+        9: (232, 170, 108, 255),
+        10: (255, 225, 128, 255),
+        11: (255, 184, 180, 255),
+        12: (255, 255, 140, 255),
+        13: (255, 180, 196, 255),
+        14: (255, 0, 0, 255),
+        15: (255, 218, 218, 255),
+    }
+
+    data = numpy.round(numpy.random.random_sample((1, 256, 256)) * 15)
+    d, m = colormap.apply_cmap(data.copy(), cm)
+    dd, mm = colormap.apply_discrete_cmap(data.copy(), cm)
+    assert d.dtype == numpy.uint8
+    assert m.dtype == numpy.uint8

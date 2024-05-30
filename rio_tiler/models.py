@@ -2,24 +2,28 @@
 
 import itertools
 import warnings
-from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import attr
 import numpy
 from affine import Affine
 from color_operations import parse_operations, scale_dtype, to_math_type
+from numpy.typing import NDArray
 from pydantic import BaseModel
 from rasterio import windows
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
 from rasterio.dtypes import dtype_ranges
 from rasterio.enums import ColorInterp
+from rasterio.errors import NotGeoreferencedWarning
+from rasterio.features import rasterize
 from rasterio.io import MemoryFile
 from rasterio.plot import reshape_as_image
 from rasterio.transform import from_bounds
+from rasterio.warp import transform_geom
 
 from rio_tiler.colormap import apply_cmap
+from rio_tiler.constants import WGS84_CRS
 from rio_tiler.errors import InvalidDatatypeWarning, InvalidPointDataError
 from rio_tiler.expression import apply_expression, get_expression_blocks
 from rio_tiler.types import (
@@ -31,6 +35,7 @@ from rio_tiler.types import (
     RIOResampling,
 )
 from rio_tiler.utils import (
+    _validate_shape_input,
     get_array_statistics,
     linear_rescale,
     non_alpha_indexes,
@@ -39,22 +44,16 @@ from rio_tiler.utils import (
 )
 
 
-class NodataTypes(str, Enum):
-    """rio-tiler Nodata types."""
-
-    Alpha = "Alpha"
-    Mask = "Mask"
-    Internal = "Internal"
-    Nodata = "Nodata"
-    Empty = "None"
-
-
 class RioTilerBaseModel(BaseModel):
-    """Base Model for rio-tiler models."""
+    """Provides dictionary access for pydantic models, for backwards compatability."""
 
     def __getitem__(self, item):
-        """Keep `getter` access for compatibility."""
-        return self.__dict__[item]
+        """Access item like in Dict."""
+        warnings.warn(
+            "'key' access will has been deprecated and will be removed in rio-tiler 7.0.",
+            DeprecationWarning,
+        )
+        return {**self.__dict__, **self.__pydantic_extra__}[item]
 
 
 class Bounds(RioTilerBaseModel):
@@ -76,17 +75,13 @@ class Info(SpatialInfo):
     band_metadata: List[Tuple[str, Dict]]
     band_descriptions: List[Tuple[str, str]]
     dtype: str
-    nodata_type: NodataTypes
-    colorinterp: Optional[List[str]]
-    scale: Optional[float]
-    offset: Optional[float]
-    colormap: Optional[GDALColorMapType]
+    nodata_type: Literal["Alpha", "Mask", "Internal", "Nodata", "None"]
+    colorinterp: Optional[List[str]] = None
+    scales: Optional[List[float]] = None
+    offsets: Optional[List[float]] = None
+    colormap: Optional[GDALColorMapType] = None
 
-    class Config:
-        """Config for model."""
-
-        extra = "allow"
-        use_enum_values = True
+    model_config = {"extra": "allow"}
 
 
 class BandStatistics(RioTilerBaseModel):
@@ -107,10 +102,7 @@ class BandStatistics(RioTilerBaseModel):
     masked_pixels: float
     valid_pixels: float
 
-    class Config:
-        """Config for model."""
-
-        extra = "allow"  # We allow extra values for `percentiles_{}`
+    model_config = {"extra": "allow"}
 
 
 def to_coordsbbox(bbox) -> Optional[BoundingBox]:
@@ -237,7 +229,7 @@ class PointData:
             raise InvalidPointDataError("Empty PointData list.")
 
         # validate coordinates
-        if all([pt.coordinates or pt.crs or None for pt in data]):
+        if all(pt.coordinates or pt.crs or None for pt in data):
             lon, lat, crs = zip(*[(*(pt.coordinates or []), pt.crs) for pt in data])
             if len(set(lon)) > 1 or len(set(lat)) > 1 or len(set(crs)) > 1:
                 raise InvalidPointDataError(
@@ -253,9 +245,7 @@ class PointData:
         )
 
         band_names = list(
-            itertools.chain.from_iterable(
-                [pt.band_names for pt in data if pt.band_names]
-            )
+            itertools.chain.from_iterable([pt.band_names for pt in data if pt.band_names])
         )
 
         metadata = dict(
@@ -277,7 +267,7 @@ class PointData:
         """return a numpy masked array."""
         warnings.warn(
             "'PointData.as_masked' has been deprecated and will be removed"
-            "in rio-tiler 6.0. You can get the masked array directly with `PointData.array` attribute.",
+            "in rio-tiler 7.0. You can get the masked array directly with `PointData.array` attribute.",
             DeprecationWarning,
         )
         return self.array
@@ -341,7 +331,7 @@ class ImageData:
     )
     crs: Optional[CRS] = attr.ib(default=None, kw_only=True)
     metadata: Optional[Dict] = attr.ib(factory=dict, kw_only=True)
-    band_names: List[str] = attr.ib(kw_only=True)
+    band_names: Optional[List[str]] = attr.ib(kw_only=True)
     dataset_statistics: Optional[Sequence[Tuple[float, float]]] = attr.ib(
         default=None, kw_only=True
     )
@@ -380,7 +370,7 @@ class ImageData:
         """
         warnings.warn(
             "'ImageData.from_array()' has been deprecated and will be removed"
-            "in rio-tiler 6.0.",
+            "in rio-tiler 7.0.",
             DeprecationWarning,
         )
         return cls(arr)
@@ -393,40 +383,46 @@ class ImageData:
             data (bytes): raster dataset as bytes.
 
         """
-        with MemoryFile(data) as m:
-            with m.open() as dataset:
-                indexes = non_alpha_indexes(dataset)
-                if ColorInterp.alpha in dataset.colorinterp:
-                    alpha_idx = dataset.colorinterp.index(ColorInterp.alpha) + 1
-                    idx = tuple(indexes) + (alpha_idx,)
-                    array = dataset.read(indexes=idx)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=NotGeoreferencedWarning,
+                module="rasterio",
+            )
+            with MemoryFile(data) as m:
+                with m.open() as dataset:
+                    indexes = non_alpha_indexes(dataset)
+                    if ColorInterp.alpha in dataset.colorinterp:
+                        alpha_idx = dataset.colorinterp.index(ColorInterp.alpha) + 1
+                        idx = tuple(indexes) + (alpha_idx,)
+                        array = dataset.read(indexes=idx)
 
-                    mask = ~array[-1].astype("bool")
-                    array = numpy.ma.MaskedArray(array[0:-1])
-                    array.mask = mask
+                        mask = ~array[-1].astype("bool")
+                        array = numpy.ma.MaskedArray(array[0:-1])
+                        array.mask = mask
 
-                else:
-                    array = dataset.read(indexes=indexes, masked=True)
+                    else:
+                        array = dataset.read(indexes=indexes, masked=True)
 
-                stats = []
-                for ix in indexes:
-                    tags = dataset.tags(ix)
-                    if all(
-                        stat in tags
-                        for stat in ["STATISTICS_MINIMUM", "STATISTICS_MAXIMUM"]
-                    ):
-                        stat_min = float(tags.get("STATISTICS_MINIMUM"))
-                        stat_max = float(tags.get("STATISTICS_MAXIMUM"))
-                        stats.append((stat_min, stat_max))
+                    stats = []
+                    for ix in indexes:
+                        tags = dataset.tags(ix)
+                        if all(
+                            stat in tags
+                            for stat in ["STATISTICS_MINIMUM", "STATISTICS_MAXIMUM"]
+                        ):
+                            stat_min = float(tags.get("STATISTICS_MINIMUM"))
+                            stat_max = float(tags.get("STATISTICS_MAXIMUM"))
+                            stats.append((stat_min, stat_max))
 
-                dataset_statistics = stats if len(stats) == len(indexes) else None
+                    dataset_statistics = stats if len(stats) == len(indexes) else None
 
-                return cls(
-                    array,
-                    crs=dataset.crs,
-                    bounds=dataset.bounds,
-                    dataset_statistics=dataset_statistics,
-                )
+                    return cls(
+                        array,
+                        crs=dataset.crs,
+                        bounds=dataset.bounds,
+                        dataset_statistics=dataset_statistics,
+                    )
 
     @classmethod
     def create_from_list(cls, data: Sequence["ImageData"]) -> "ImageData":
@@ -441,9 +437,7 @@ class ImageData:
         # Get cutline mask at highest resolution.
         max_h, max_w = max(h), max(w)
         cutline_mask = next(
-            img.cutline_mask
-            for img in data
-            if img.height == max_h and img.width == max_w
+            img.cutline_mask for img in data if img.height == max_h and img.width == max_w
         )
 
         if len(set(h)) > 1 or len(set(w)) > 1:
@@ -464,9 +458,7 @@ class ImageData:
 
         assets = list(
             dict.fromkeys(
-                itertools.chain.from_iterable(
-                    [img.assets for img in data if img.assets]
-                )
+                itertools.chain.from_iterable([img.assets for img in data if img.assets])
             )
         )
 
@@ -510,7 +502,7 @@ class ImageData:
         """return a numpy masked array."""
         warnings.warn(
             "'ImageData.as_masked' has been deprecated and will be removed"
-            "in rio-tiler 6.0. You can get the masked array directly with `ImageData.array` attribute.",
+            "in rio-tiler 7.0. You can get the masked array directly with `ImageData.array` attribute.",
             DeprecationWarning,
         )
         return self.array
@@ -521,7 +513,7 @@ class ImageData:
         (bands, rows, columns) -> (rows, columns, bands).
 
         """
-        return reshape_as_image(self.array.data)
+        return reshape_as_image(self.array)
 
     @property
     def width(self) -> int:
@@ -586,7 +578,9 @@ class ImageData:
         for ops in parse_operations(color_formula):
             out = scale_dtype(ops(to_math_type(out)), numpy.uint8)
 
-        self.array.data = out
+        data = numpy.ma.MaskedArray(out)
+        data.mask = self.array.mask
+        self.array = data
 
     def apply_expression(self, expression: str) -> "ImageData":
         """Apply expression to the image data."""
@@ -627,9 +621,9 @@ class ImageData:
     ) -> "ImageData":
         """Resize data and mask."""
         data = resize_array(self.array.data, height, width, resampling_method)
-        mask = resize_array(
-            self.array.mask * 1, height, width, resampling_method
-        ).astype("bool")
+        mask = resize_array(self.array.mask * 1, height, width, resampling_method).astype(
+            "bool"
+        )
 
         return ImageData(
             numpy.ma.MaskedArray(data, mask=mask),
@@ -774,6 +768,7 @@ class ImageData:
         categories: Optional[List[float]] = None,
         percentiles: Optional[List[int]] = None,
         hist_options: Optional[Dict] = None,
+        coverage: Optional[numpy.ndarray] = None,
     ) -> Dict[str, BandStatistics]:
         """Return statistics from ImageData."""
         hist_options = hist_options or {}
@@ -783,6 +778,7 @@ class ImageData:
             categorical=categorical,
             categories=categories,
             percentiles=percentiles,
+            coverage=coverage,
             **hist_options,
         )
 
@@ -790,3 +786,52 @@ class ImageData:
             f"{self.band_names[ix]}": BandStatistics(**stats[ix])
             for ix in range(len(stats))
         }
+
+    def get_coverage_array(
+        self,
+        shape: Dict,
+        shape_crs: CRS = WGS84_CRS,
+        cover_scale: int = 10,
+    ) -> NDArray[numpy.floating]:
+        """Post-process image data.
+
+        Args:
+            in_range (tuple): input min/max bounds value to rescale from.
+            out_dtype (str, optional): output datatype after rescaling. Defaults to `uint8`.
+            color_formula (str, optional): color-ops formula (see: https://github.com/vincentsarago/color-ops).
+            cover_scale (int, optional):
+                Scale used when generating coverage estimates of each
+                raster cell by vector feature. Coverage is generated by
+                rasterizing the feature at a finer resolution than the raster then using a summation to aggregate
+                to the raster resolution and dividing by the square of cover_scale
+                to get coverage value for each cell. Increasing cover_scale
+                will increase the accuracy of coverage values; three orders
+                magnitude finer resolution (cover_scale=1000) is usually enough to
+                get coverage estimates with <1% error in individual edge cells coverage
+                estimates, though much smaller values (e.g., cover_scale=10) are often
+                sufficient (<10% error) and require less memory.
+
+        Returns:
+            numpy.array: percent coverage.
+
+        Note: code adapted from https://github.com/perrygeo/python-rasterstats/pull/136 by @sgoodm
+
+        """
+        shape = _validate_shape_input(shape)
+
+        if self.crs != shape_crs:
+            shape = transform_geom(shape_crs, self.crs, shape)
+
+        cover_array = rasterize(
+            [(shape, 1)],
+            out_shape=(self.height * cover_scale, self.width * cover_scale),
+            transform=self.transform * Affine.scale(1 / cover_scale),
+            all_touched=True,
+            fill=0,
+            dtype="uint8",
+        )
+        cover_array = cover_array.reshape(
+            (self.height, cover_scale, self.width, cover_scale)
+        ).astype("float32")
+
+        return cover_array.sum(-1).sum(1) / (cover_scale**2)

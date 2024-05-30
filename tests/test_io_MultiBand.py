@@ -9,7 +9,7 @@ import morecantile
 import pytest
 
 from rio_tiler.constants import WEB_MERCATOR_TMS
-from rio_tiler.errors import ExpressionMixingWarning, MissingBands
+from rio_tiler.errors import ExpressionMixingWarning, InvalidExpression, MissingBands
 from rio_tiler.io import BaseReader, MultiBandReader, Reader
 from rio_tiler.models import BandStatistics
 
@@ -40,10 +40,7 @@ class BandFileReader(MultiBandReader):
     def __attrs_post_init__(self):
         """Parse Sceneid and get grid bounds."""
         self.bands = sorted(
-            [
-                p.stem.split("_")[1]
-                for p in pathlib.Path(self.input).glob("*scene_*.tif")
-            ]
+            [p.stem.split("_")[1] for p in pathlib.Path(self.input).glob("*scene_*.tif")]
         )
         with self.reader(self._get_band_url(self.bands[0])) as src:
             self.bounds = src.bounds
@@ -67,6 +64,9 @@ def test_MultiBandReader():
         assert src.crs
 
         assert sorted(src.parse_expression("band1/band2")) == ["band1", "band2"]
+
+        with pytest.raises(InvalidExpression):
+            src.parse_expression("band19/band30")
 
         with pytest.warns(UserWarning):
             meta = src.info()

@@ -22,6 +22,7 @@ from rio_tiler.constants import WEB_MERCATOR_TMS, WGS84_CRS
 from rio_tiler.errors import (
     ExpressionMixingWarning,
     InvalidBufferSize,
+    InvalidExpression,
     NoOverviewWarning,
     TileOutsideBounds,
 )
@@ -43,6 +44,7 @@ COG_EARTH = os.path.join(PREFIX, "cog_fullearth.tif")
 GEOTIFF = os.path.join(PREFIX, "nocog.tif")
 COG_EUROPA = os.path.join(PREFIX, "cog_nonearth.tif")
 COG_MARS = os.path.join(PREFIX, "cog_hirise_mars.tif")
+COG_INVERTED = os.path.join(PREFIX, "inverted_lat.tif")
 
 KEY_ALPHA = "hro_sources/colorado/201404_13SED190110_201404_0x1500m_CL_1_alpha.tif"
 COG_ALPHA = os.path.join(PREFIX, "my-bucket", KEY_ALPHA)
@@ -80,9 +82,8 @@ def test_info_valid():
     """Should work as expected (get file info)"""
     with Reader(COG_SCALE) as src:
         meta = src.info()
-        assert meta["scale"]
-        assert meta.scale
-        assert meta.offset
+        assert meta.scales
+        assert meta.offsets
         assert not meta.colormap
         assert meta.width
         assert meta.height
@@ -111,8 +112,8 @@ def test_info_valid():
         assert meta.dtype == "int16"
         assert meta.colorinterp == ["gray"]
         assert meta.nodata_type == "Nodata"
-        assert meta.scale
-        assert meta.offset
+        assert meta.scales
+        assert meta.offsets
         assert meta.band_metadata
         band_meta = meta.band_metadata[0]
         assert band_meta[0] == "b1"
@@ -193,6 +194,13 @@ def test_tile_valid_default():
         assert img_buffer.height == 276
         assert not img.bounds == img_buffer.bounds
         assert numpy.array_equal(img.data, img_buffer.data[:, 10:266, 10:266])
+
+
+def test_invalid_expression():
+    """Should raise an error with invalid expression."""
+    with pytest.raises(InvalidExpression):
+        with Reader(COGEO) as src:
+            src.preview(expression="somethingwithoutband")
 
 
 def test_tile_invalid_bounds():
@@ -356,6 +364,12 @@ def test_statistics():
         assert stats["b1"].percentile_2
         assert stats["b1"].percentile_98
 
+        with pytest.warns(DeprecationWarning):
+            assert stats["b1"]["percentile_2"]
+
+        with pytest.warns(DeprecationWarning):
+            assert stats["b1"]["percentile_98"]
+
     with Reader(COGEO) as src:
         stats = src.statistics(percentiles=[3])
         assert stats["b1"].percentile_3
@@ -404,6 +418,7 @@ def test_Reader_Options():
     with Reader(COGEO, options={"nodata": 1}) as src:
         assert src.info().nodata_value == 1
         assert src.info().nodata_type == "Nodata"
+        assert src.info()["nodata_type"] == "Nodata"
 
     with Reader(COGEO) as src:
         assert src.info().nodata_type == "None"
@@ -423,11 +438,15 @@ def test_Reader_Options():
 
     with Reader(COG_SCALE, options={"unscale": True}) as src:
         p = src.point(310000, 4100000, coord_crs=src.dataset.crs)
-        assert round(float(p.data[0]), 3) == 1000.892
+        numpy.testing.assert_allclose(p.data, [1000.892, 2008.917], atol=1e-03)
+
+        # applies correctly when passing indexes=[...]
+        p = src.point(310000, 4100000, coord_crs=src.dataset.crs, indexes=[2])
+        numpy.testing.assert_allclose(p.data, [2008.917], atol=1e-03)
 
         # passing unscale in method should overwrite the defaults
         p = src.point(310000, 4100000, coord_crs=src.dataset.crs, unscale=False)
-        assert p.data[0] == 8917
+        numpy.testing.assert_equal(p.data, [8917, 8917])
 
     cutline = "POLYGON ((13 1685, 1010 6, 2650 967, 1630 2655, 13 1685))"
     with Reader(COGEO, options={"vrt_options": {"cutline": cutline}}) as src:
@@ -971,7 +990,7 @@ def test_tms_tilesize_and_zoom():
 
     tms_128 = TileMatrixSet.custom(
         WEB_MERCATOR_TMS.xy_bbox,
-        WEB_MERCATOR_TMS.crs,
+        CRS.from_epsg(3857),
         title="mercator with 64 tilesize",
         tile_width=64,
         tile_height=64,
@@ -982,7 +1001,7 @@ def test_tms_tilesize_and_zoom():
 
     tms_2048 = TileMatrixSet.custom(
         WEB_MERCATOR_TMS.xy_bbox,
-        WEB_MERCATOR_TMS.crs,
+        CRS.from_epsg(3857),
         title="mercator with 2048 tilesize",
         tile_width=2048,
         tile_height=2048,
@@ -998,3 +1017,112 @@ def test_metadata_img():
         img = src.preview()
         assert img.dataset_statistics
         assert img.metadata
+
+
+def test_feature_statistics():
+    """Test feature statistics method implemented in titiler."""
+    # square
+    square = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {
+            "coordinates": [
+                [
+                    [-56.85853679288809, 73.6870721652219],
+                    [-56.85853679288809, 73.18595963998644],
+                    [-54.97274279983506, 73.18595963998644],
+                    [-54.97274279983506, 73.6870721652219],
+                    [-56.85853679288809, 73.6870721652219],
+                ]
+            ],
+            "type": "Polygon",
+        },
+    }
+
+    square_crs = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [442337.0, 8175239.0],
+                [517915.0, 8175239.0],
+                [517915.0, 8134628.0],
+                [442337.0, 8134628.0],
+                [442337.0, 8175239.0],
+            ]
+        ],
+    }
+
+    # Case 1 - image should be aligned with the bounds
+    # because we reproject to the shape crs
+    with Reader(COGEO) as src:
+        image = src.feature(
+            square,
+            dst_crs=WGS84_CRS,
+            shape_crs=WGS84_CRS,
+        )
+        coverage_array = image.get_coverage_array(
+            square,
+            shape_crs=WGS84_CRS,
+        )
+        stats = image.statistics(coverage=coverage_array)
+        assert numpy.unique(coverage_array).tolist() == [1.0]
+
+    # Case 2 - image not aligned with bounds because we align the
+    # bounds to the reprojected dataset
+    with Reader(COGEO) as src:
+        image = src.feature(
+            square,
+            dst_crs=WGS84_CRS,
+            shape_crs=WGS84_CRS,
+            align_bounds_with_dataset=True,
+        )
+        coverage_array = image.get_coverage_array(
+            square,
+            shape_crs=WGS84_CRS,
+        )
+        stats_align = image.statistics(coverage=coverage_array)
+        assert not numpy.unique(coverage_array).tolist() == [1.0]
+
+        assert stats["b1"].mean != stats_align["b1"].mean
+
+    # Case 3 - square geometry in dataset CRS
+    with Reader(COGEO) as src:
+        image = src.feature(
+            square_crs,
+            dst_crs=src.crs,
+            shape_crs=src.crs,
+        )
+        coverage_array = image.get_coverage_array(
+            square_crs,
+            shape_crs=src.crs,
+        )
+        stats = image.statistics(coverage=coverage_array)
+        assert numpy.unique(coverage_array).tolist() == [1.0]
+
+    # Case 4 - square geometry in dataset CRS but aligned with dataset
+    with Reader(COGEO) as src:
+        image = src.feature(
+            square_crs,
+            dst_crs=src.crs,
+            shape_crs=src.crs,
+            align_bounds_with_dataset=True,
+        )
+        coverage_array = image.get_coverage_array(
+            square_crs,
+            shape_crs=src.crs,
+        )
+        stats_align = image.statistics(coverage=coverage_array)
+        assert not numpy.unique(coverage_array).tolist() == [1.0]
+
+        assert stats["b1"].mean != stats_align["b1"].mean
+
+
+def test_inverted_latitude():
+    """Test working with inverted Latitude."""
+    with pytest.warns(UserWarning):
+        with Reader(COG_INVERTED) as src:
+            assert src.geographic_bounds[1] < src.geographic_bounds[3]
+
+    with pytest.warns(UserWarning):
+        with Reader(COG_INVERTED) as src:
+            _ = src.tile(0, 0, 0)

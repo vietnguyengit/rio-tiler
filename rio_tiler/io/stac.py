@@ -2,6 +2,7 @@
 
 import json
 import os
+import warnings
 from typing import Any, Dict, Iterator, Optional, Set, Type, Union
 from urllib.parse import urlparse
 
@@ -82,10 +83,7 @@ def aws_get_object(
             else:
                 endpoint_url = "http://" + endpoint_url
 
-        client = session.client(
-            "s3",
-            endpoint_url=endpoint_url or "s3.amazonaws.com",
-        )
+        client = session.client("s3", endpoint_url=endpoint_url)
 
     params = {"Bucket": bucket, "Key": key}
     if request_pays or os.environ.get("AWS_REQUEST_PAYER", "").lower() == "requester":
@@ -267,7 +265,7 @@ class STACReader(MultiBaseReader):
             )
         )
         if not self.assets:
-            raise MissingAssets("No valid asset found")
+            raise MissingAssets("No valid asset found. Asset's media types not supported")
 
     @minzoom.default
     def _minzoom(self):
@@ -288,13 +286,15 @@ class STACReader(MultiBaseReader):
 
         """
         if asset not in self.assets:
-            raise InvalidAssetName(f"{asset} is not valid")
+            raise InvalidAssetName(
+                f"'{asset}' is not valid, should be one of {self.assets}"
+            )
 
         asset_info = self.item.assets[asset]
         extras = asset_info.extra_fields
 
         info = AssetInfo(
-            url=asset_info.get_absolute_href(),
+            url=asset_info.get_absolute_href() or asset_info.href,
             metadata=extras,
         )
 
@@ -307,7 +307,16 @@ class STACReader(MultiBaseReader):
                 for b in bands
                 if {"minimum", "maximum"}.issubset(b.get("statistics", {}))
             ]
-            if len(stats) == len(bands):
+            # check that stats data are all double and make warning if not
+            if (
+                stats
+                and all(isinstance(v, (int, float)) for stat in stats for v in stat)
+                and len(stats) == len(bands)
+            ):
                 info["dataset_statistics"] = stats
+            else:
+                warnings.warn(
+                    "Some statistics data in STAC are invalid, they will be ignored."
+                )
 
         return info

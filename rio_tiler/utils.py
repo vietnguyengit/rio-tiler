@@ -1,5 +1,6 @@
 """rio_tiler.utils: utility functions."""
 
+import math
 import warnings
 from io import BytesIO
 from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple, Union
@@ -7,6 +8,7 @@ from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple, Union
 import numpy
 import rasterio
 from affine import Affine
+from numpy.typing import NDArray
 from rasterio import windows
 from rasterio.crs import CRS
 from rasterio.dtypes import _gdal_typename
@@ -20,7 +22,7 @@ from rasterio.vrt import WarpedVRT
 from rasterio.warp import calculate_default_transform, transform_geom
 
 from rio_tiler.colormap import apply_cmap
-from rio_tiler.constants import WEB_MERCATOR_CRS
+from rio_tiler.constants import WEB_MERCATOR_CRS, WGS84_CRS
 from rio_tiler.errors import RioTilerError
 from rio_tiler.types import BBox, ColorMapType, IntervalTuple, RIOResampling
 
@@ -31,11 +33,33 @@ def _chunks(my_list: Sequence, chuck_size: int) -> Generator[Sequence, None, Non
         yield my_list[i : i + chuck_size]
 
 
+# Ref: https://stackoverflow.com/posts/73905572
+def _weighted_quantiles(
+    values: NDArray[numpy.floating],
+    weights: NDArray[numpy.floating],
+    quantiles: float = 0.5,
+) -> float:
+    i = numpy.argsort(values)
+    c = numpy.cumsum(weights[i])
+    return float(values[i[numpy.searchsorted(c, numpy.array(quantiles) * c[-1])]])
+
+
+# Ref: https://stackoverflow.com/questions/2413522
+def _weighted_stdev(
+    values: NDArray[numpy.floating],
+    weights: NDArray[numpy.floating],
+) -> float:
+    average = numpy.average(values, weights=weights)
+    variance = numpy.average((values - average) ** 2, weights=weights)
+    return float(math.sqrt(variance))
+
+
 def get_array_statistics(
     data: numpy.ma.MaskedArray,
     categorical: bool = False,
     categories: Optional[List[float]] = None,
     percentiles: Optional[List[int]] = None,
+    coverage: Optional[NDArray[numpy.floating]] = None,
     **kwargs: Any,
 ) -> List[Dict[Any, Any]]:
     """Calculate per band array statistics.
@@ -45,6 +69,7 @@ def get_array_statistics(
         categorical (bool): treat input data as categorical data. Defaults to `False`.
         categories (list of numbers, optional): list of categories to return value for.
         percentiles (list of numbers, optional): list of percentile values to calculate. Defaults to `[2, 98]`.
+        coverage (numpy.array, optional): Data coverage fraction.
         kwargs (optional): options to forward to `numpy.histogram` function (only applies for non-categorical data).
 
     Returns:
@@ -81,25 +106,34 @@ def get_array_statistics(
     percentiles = percentiles or [2, 98]
 
     if len(data.shape) < 3:
-        data = numpy.expand_dims(data, axis=0)
+        data = numpy.ma.expand_dims(data, axis=0)
 
     output: List[Dict[Any, Any]] = []
     percentiles_names = [f"percentile_{int(p)}" for p in percentiles]
+
+    if coverage is not None:
+        assert (
+            coverage.shape
+            == (
+                data.shape[1],
+                data.shape[2],
+            )
+        ), f"Invalid shape ({coverage.shape}) for Coverage, expected {(data.shape[1], data.shape[2])}"
+
+    else:
+        coverage = numpy.ones((data.shape[1], data.shape[2]))
 
     # Avoid non masked nan/inf values
     numpy.ma.fix_invalid(data, copy=False)
 
     for b in range(data.shape[0]):
-        keys, counts = numpy.unique(data[b].compressed(), return_counts=True)
+        data_comp = data[b].compressed()
+
+        keys, counts = numpy.unique(data_comp, return_counts=True)
 
         valid_pixels = float(numpy.ma.count(data[b]))
         masked_pixels = float(numpy.ma.count_masked(data[b]))
         valid_percent = round((valid_pixels / data[b].size) * 100, 2)
-        info_px = {
-            "valid_pixels": valid_pixels,
-            "masked_pixels": masked_pixels,
-            "valid_percent": valid_percent,
-        }
 
         if categorical:
             out_dict = dict(zip(keys.tolist(), counts.tolist()))
@@ -111,35 +145,67 @@ def get_array_statistics(
                 h_keys,
             ]
         else:
-            h_counts, h_keys = numpy.histogram(data[b].compressed(), **kwargs)
+            h_counts, h_keys = numpy.histogram(data_comp, **kwargs)
             histogram = [h_counts.tolist(), h_keys.tolist()]
 
+        # Data coverage fractions
+        data_cov = data[b] * coverage
+        # Coverage Array + data mask
+        masked_coverage = numpy.ma.MaskedArray(coverage, mask=data_cov.mask)
+
         if valid_pixels:
-            percentiles_values = numpy.percentile(
-                data[b].compressed(), percentiles
-            ).tolist()
+            # TODO: when switching to numpy~=2.0
+            # percentiles_values = numpy.percentile(
+            #     data_comp, percentiles, weights=coverage.flatten()
+            # ).tolist()
+            percentiles_values = [
+                _weighted_quantiles(data_comp, masked_coverage.compressed(), pp / 100.0)
+                for pp in percentiles
+            ]
         else:
-            percentiles_values = (numpy.nan,) * len(percentiles_names)
+            percentiles_values = [numpy.nan] * len(percentiles_names)
+
+        if valid_pixels:
+            majority = float(keys[counts.tolist().index(counts.max())].tolist())
+            minority = float(keys[counts.tolist().index(counts.min())].tolist())
+        else:
+            majority = numpy.nan
+            minority = numpy.nan
+
+        _count = masked_coverage.sum()
+        _sum = data_cov.sum()
 
         output.append(
             {
+                # Minimum value, not taking coverage fractions into account.
                 "min": float(data[b].min()),
+                # Maximum value, not taking coverage fractions into account.
                 "max": float(data[b].max()),
-                "mean": float(data[b].mean()),
-                "count": float(data[b].count()),
-                "sum": float(data[b].sum()),
-                "std": float(data[b].std()),
-                "median": float(numpy.ma.median(data[b])),
-                "majority": float(keys[counts.tolist().index(counts.max())].tolist())
-                if valid_pixels
-                else numpy.nan,
-                "minority": float(keys[counts.tolist().index(counts.min())].tolist())
-                if valid_pixels
-                else numpy.nan,
+                # Mean value, weighted by the percent of each cell that is covered.
+                "mean": float(_sum / _count),
+                # Sum of all non-masked cell coverage fractions.
+                "count": float(_count),
+                # Sum of values, weighted by their coverage fractions.
+                "sum": float(_sum),
+                # Population standard deviation of cell values, taking into account coverage fraction.
+                "std": _weighted_stdev(data_comp, masked_coverage.compressed()),
+                # Median value of cells, weighted by the percent of each cell that is covered.
+                "median": _weighted_quantiles(data_comp, masked_coverage.compressed()),
+                # The value occupying the greatest number of cells.
+                "majority": majority,
+                # The value occupying the least number of cells.
+                "minority": minority,
+                # Unique values.
                 "unique": float(counts.size),
+                # quantiles
                 **dict(zip(percentiles_names, percentiles_values)),
                 "histogram": histogram,
-                **info_px,
+                # Number of non-masked cells, not taking coverage fractions into account.
+                "valid_pixels": valid_pixels,
+                # Number of masked cells, not taking coverage fractions into account.
+                "masked_pixels": masked_pixels,
+                # Percent of valid cells
+                "valid_percent": valid_percent,
             }
         )
 
@@ -149,6 +215,18 @@ def get_array_statistics(
 # https://github.com/OSGeo/gdal/blob/b1c9c12ad373e40b955162b45d704070d4ebf7b0/gdal/frmts/ingr/IngrTypes.cpp#L191
 def _div_round_up(a: int, b: int) -> int:
     return (a // b) if (a % b) == 0 else (a // b) + 1
+
+
+def _round_window(window: windows.Window) -> windows.Window:
+    (row_start, row_stop), (col_start, col_stop) = window.toranges()
+    row_start, row_stop = int(math.floor(row_start)), int(math.ceil(row_stop))
+    col_start, col_stop = int(math.floor(col_start)), int(math.ceil(col_stop))
+    return windows.Window(
+        col_off=col_start,
+        row_off=row_start,
+        width=max(col_stop - col_start, 0.0),
+        height=max(row_stop - row_start, 0.0),
+    )
 
 
 def get_overview_level(
@@ -211,24 +289,72 @@ def get_vrt_transform(
     width: Optional[int] = None,
     dst_crs: CRS = WEB_MERCATOR_CRS,
     window_precision: int = 6,
+    align_bounds_with_dataset: bool = False,
 ) -> Tuple[Affine, int, int]:
     """Calculate VRT transform.
 
     Args:
         src_dst (rasterio.io.DatasetReader or rasterio.io.DatasetWriter or rasterio.vrt.WarpedVRT): Rasterio dataset.
         bounds (tuple): Bounding box coordinates in target crs (**dst_crs**).
-        height (int, optional): Desired output height of the array for the input bounds.
-        width (int, optional): Desired output width of the array for the input bounds.
+        height (int, optional): Output height of the array for the input bounds.
+        width (int, optional): Output width of the array for the input bounds.
         dst_crs (rasterio.crs.CRS, optional): Target Coordinate Reference System. Defaults to `epsg:3857`.
+        align_bounds_with_dataset (bool): Align input bounds with dataset transform. Defaults to `False`.
 
     Returns:
         tuple: VRT transform (affine.Affine), width (int) and height (int)
 
     """
     if src_dst.crs != dst_crs:
+        src_width = src_dst.width
+        src_height = src_dst.height
+        src_bounds = list(src_dst.bounds)
+
+        # Fix for https://github.com/cogeotiff/rio-tiler/issues/654
+        #
+        # When using `calculate_default_transform` with dataset
+        # which span at high/low latitude outside the area_of_use
+        # of the WebMercator projection, we `crop` the dataset
+        # to get the transform (resolution).
+        #
+        # Note: Should be handled in gdal 3.8 directly
+        # https://github.com/OSGeo/gdal/pull/8775
+        if (
+            src_dst.crs == WGS84_CRS
+            and dst_crs == WEB_MERCATOR_CRS
+            and (src_bounds[1] < -85.06 or src_bounds[3] > 85.06)
+        ):
+            warnings.warn(
+                "Adjusting dataset latitudes to avoid re-projection overflow",
+                UserWarning,
+            )
+            src_bounds[1] = max(src_bounds[1], -85.06)
+            src_bounds[3] = min(src_bounds[3], 85.06)
+            w = windows.from_bounds(*src_bounds, transform=src_dst.transform)
+            src_height = round(w.height)
+            src_width = round(w.width)
+
+        # Specific FIX when bounds and transform are inverted
+        # See: https://github.com/US-GHG-Center/veda-config-ghg/pull/333
+        elif (
+            src_dst.crs == WGS84_CRS
+            and dst_crs == WEB_MERCATOR_CRS
+            and (src_bounds[1] > 85.06 or src_bounds[3] < -85.06)
+        ):
+            warnings.warn(
+                "Adjusting dataset latitudes to avoid re-projection overflow",
+                UserWarning,
+            )
+            src_bounds[1] = min(src_bounds[1], 85.06)
+            src_bounds[3] = max(src_bounds[3], -85.06)
+            w = windows.from_bounds(*src_bounds, transform=src_dst.transform)
+            src_height = round(w.height)
+            src_width = round(w.width)
+
         dst_transform, _, _ = calculate_default_transform(
-            src_dst.crs, dst_crs, src_dst.width, src_dst.height, *src_dst.bounds
+            src_dst.crs, dst_crs, src_width, src_height, *src_bounds
         )
+
     else:
         dst_transform = src_dst.transform
 
@@ -252,40 +378,48 @@ def get_vrt_transform(
         # Get Bounds for the rounded window
         bounds = src_dst.window_bounds(w)
 
+    elif align_bounds_with_dataset:
+        window = _round_window(windows.from_bounds(*bounds, transform=dst_transform))
+        bounds = windows.bounds(window, dst_transform)
+
     w, s, e, n = bounds
 
-    # TODO: Explain
-    if not height or not width:
-        vrt_width = max(1, round((e - w) / dst_transform.a))
-        vrt_height = max(1, round((s - n) / dst_transform.e))
-        vrt_transform = from_bounds(w, s, e, n, vrt_width, vrt_height)
-        return vrt_transform, vrt_width, vrt_height
+    # When no output size (resolution) - Use Dataset Resolution
+    # NOTE: When we don't `fix` the output width/height, we're using the reprojected dataset resolution
+    # to calculate what is the size/transform of the VRT
+    w_res = dst_transform.a
+    h_res = dst_transform.e
 
-    # TODO: Explain
-    tile_transform = from_bounds(w, s, e, n, width, height)
-    w_res = (
-        tile_transform.a
-        if abs(tile_transform.a) < abs(dst_transform.a)
-        else dst_transform.a
-    )
-    h_res = (
-        tile_transform.e
-        if abs(tile_transform.e) < abs(dst_transform.e)
-        else dst_transform.e
-    )
+    # NOTE: When we have desired output height/width, we can use them to
+    # calculate the output size/transform. The VRT resolution will be aligned with the desired
+    # output resolution (if not bigger)
+    if height and width:
+        output_transform = from_bounds(w, s, e, n, width, height)
 
-    # TODO: Explain
+        # NOTE: Here we check if the Output Resolution is higher thant the dataset resolution (OverZoom)
+        # When not overzooming we don't want to use the output Width/Height to calculate the transform
+        # See issues https://github.com/cogeotiff/rio-tiler/pull/648
+        w_res = (
+            output_transform.a
+            if abs(output_transform.a) < abs(dst_transform.a)
+            else dst_transform.a
+        )
+        h_res = (
+            output_transform.e
+            if abs(output_transform.e) < abs(dst_transform.e)
+            else dst_transform.e
+        )
+
     vrt_width = max(1, round((e - w) / w_res))
     vrt_height = max(1, round((s - n) / h_res))
     vrt_transform = from_bounds(w, s, e, n, vrt_width, vrt_height)
-
     return vrt_transform, vrt_width, vrt_height
 
 
 def has_alpha_band(src_dst: Union[DatasetReader, DatasetWriter, WarpedVRT]) -> bool:
     """Check for alpha band or mask in source."""
     if (
-        any([MaskFlags.alpha in flags for flags in src_dst.mask_flag_enums])
+        any(MaskFlags.alpha in flags for flags in src_dst.mask_flag_enums)
         or ColorInterp.alpha in src_dst.colorinterp
     ):
         return True
@@ -295,10 +429,8 @@ def has_alpha_band(src_dst: Union[DatasetReader, DatasetWriter, WarpedVRT]) -> b
 def has_mask_band(src_dst: Union[DatasetReader, DatasetWriter, WarpedVRT]) -> bool:
     """Check for mask band in source."""
     if any(
-        [
-            (MaskFlags.per_dataset in flags and MaskFlags.alpha not in flags)
-            for flags in src_dst.mask_flag_enums
-        ]
+        (MaskFlags.per_dataset in flags and MaskFlags.alpha not in flags)
+        for flags in src_dst.mask_flag_enums
     ):
         return True
     return False

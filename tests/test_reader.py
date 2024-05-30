@@ -5,18 +5,18 @@ import os
 import numpy
 import pytest
 import rasterio
+from numpy.testing import assert_array_almost_equal
 from rasterio.warp import transform_bounds
 
 from rio_tiler import constants, reader
+from rio_tiler.constants import WGS84_CRS
 from rio_tiler.errors import PointOutsideBounds, TileOutsideBounds
 
 S3_KEY = "hro_sources/colorado/201404_13SED190110_201404_0x1500m_CL_1.tif"
 S3_KEY_ALPHA = "hro_sources/colorado/201404_13SED190110_201404_0x1500m_CL_1_alpha.tif"
 S3_KEY_NODATA = "hro_sources/colorado/201404_13SED190110_201404_0x1500m_CL_1_nodata.tif"
 S3_KEY_MASK = "hro_sources/colorado/201404_13SED190110_201404_0x1500m_CL_1_mask.tif"
-S3_KEY_EXTMASK = (
-    "hro_sources/colorado/201404_13SED190110_201404_0x1500m_CL_1_extmask.tif"
-)
+S3_KEY_EXTMASK = "hro_sources/colorado/201404_13SED190110_201404_0x1500m_CL_1_extmask.tif"
 
 S3_LOCAL = PREFIX = os.path.join(os.path.dirname(__file__), "fixtures", "my-bucket")
 S3_PATH = os.path.join(S3_LOCAL, S3_KEY)
@@ -31,6 +31,10 @@ PIX4D_PATH = os.path.join(S3_LOCAL, KEY_PIX4D)
 COG = os.path.join(os.path.dirname(__file__), "fixtures", "cog.tif")
 COG_SCALE = os.path.join(os.path.dirname(__file__), "fixtures", "cog_scale.tif")
 COG_CMAP = os.path.join(os.path.dirname(__file__), "fixtures", "cog_cmap.tif")
+COG_NODATA = os.path.join(os.path.dirname(__file__), "fixtures", "cog_nodata.tif")
+COG_NODATA_FLOAT_NAN = os.path.join(
+    os.path.dirname(__file__), "fixtures", "cog_nodata_float_nan.tif"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -106,9 +110,7 @@ def test_resampling_returns_different_results():
         12523442.714243278,
     ]
     with rasterio.open(COG) as src_dst:
-        arr, _ = reader.part(
-            src_dst, bounds, 16, 16, dst_crs=constants.WEB_MERCATOR_CRS
-        )
+        arr, _ = reader.part(src_dst, bounds, 16, 16, dst_crs=constants.WEB_MERCATOR_CRS)
         arr2, _ = reader.part(
             src_dst,
             bounds,
@@ -119,9 +121,7 @@ def test_resampling_returns_different_results():
         )
         assert not numpy.array_equal(arr, arr2)
 
-        arr, _ = reader.part(
-            src_dst, bounds, 16, 16, dst_crs=constants.WEB_MERCATOR_CRS
-        )
+        arr, _ = reader.part(src_dst, bounds, 16, 16, dst_crs=constants.WEB_MERCATOR_CRS)
         arr2, _ = reader.part(
             src_dst,
             bounds,
@@ -303,6 +303,7 @@ def test_tile_read_not_covering_the_whole_tile():
 # See https://github.com/cogeotiff/rio-tiler/issues/105#issuecomment-492268836
 def test_tile_read_validMask():
     """Dataset mask should be the same as the actual mask."""
+    # bounds fully outside dataset
     bounds = [
         -6887893.4928338025,
         12210356.646387195,
@@ -312,6 +313,33 @@ def test_tile_read_validMask():
     tilesize = 128
     with rasterio.open(COG) as src_dst:
         arr, mask = reader.part(src_dst, bounds, tilesize, tilesize, nodata=1)
+
+    masknodata = (arr[0] != 1).astype(numpy.uint8) * 255
+    numpy.testing.assert_array_equal(mask, masknodata)
+
+
+def test_read_nodata():
+    """Dataset mask should be the same as the actual mask."""
+    bounds = [
+        316470,
+        8094354,
+        415375,
+        8148789,
+    ]
+    with rasterio.open(COG) as src_dst:
+        arr, mask = reader.part(src_dst, bounds, nodata=1)
+
+    masknodata = (arr[0] != 1).astype(numpy.uint8) * 255
+    numpy.testing.assert_array_equal(mask, masknodata)
+
+    with rasterio.open(COG) as src_dst:
+        arr, mask = reader.read(src_dst, nodata=1)
+
+    masknodata = (arr[0] != 1).astype(numpy.uint8) * 255
+    numpy.testing.assert_array_equal(mask, masknodata)
+
+    with rasterio.open(COG) as src_dst:
+        arr, mask = reader.read(src_dst, dst_crs="epsg:3857", nodata=1)
 
     masknodata = (arr[0] != 1).astype(numpy.uint8) * 255
     numpy.testing.assert_array_equal(mask, masknodata)
@@ -401,8 +429,8 @@ def test_point():
         assert pt.band_names == ["b1"]
 
         pt = reader.point(src_dst, [310000, 4100000], coord_crs=src_dst.crs)
-        assert pt.data == numpy.array([8917])
-        assert pt.band_names == ["b1"]
+        numpy.testing.assert_equal(pt.data, [8917, 8917])
+        assert pt.band_names == ["b1", "b2"]
 
         with pytest.raises(PointOutsideBounds):
             reader.point(src_dst, [810000, 4100000], coord_crs=src_dst.crs)
@@ -410,9 +438,7 @@ def test_point():
     with rasterio.open(S3_ALPHA_PATH) as src_dst:
         # Test with COG + Alpha Band
         assert reader.point(src_dst, [-104.77519499, 38.95367054]).data[0]
-        assert (
-            reader.point(src_dst, [-104.77519499, 38.95367054]).mask[0] == 0
-        )  # Masked
+        assert reader.point(src_dst, [-104.77519499, 38.95367054]).mask[0] == 0  # Masked
 
 
 def test_part_with_buffer():
@@ -455,9 +481,7 @@ def test_part_with_buffer():
         assert img.height == ny
 
     with rasterio.open(COG) as src_dst:
-        imgb = reader.part(
-            src_dst, bounds, buffer=2, dst_crs=constants.WEB_MERCATOR_CRS
-        )
+        imgb = reader.part(src_dst, bounds, buffer=2, dst_crs=constants.WEB_MERCATOR_CRS)
         assert imgb.width == nx
         assert imgb.height == ny
 
@@ -553,6 +577,8 @@ def test_read():
     # Unscale Dataset
     with rasterio.open(COG_SCALE) as src:
         assert not src.dtypes[0] == numpy.float32
+        assert src.scales == (0.0001, 0.001)
+        assert src.offsets == (1000, 2000)
         img = reader.read(src, unscale=True)
         assert img.data.dtype == numpy.float32
 
@@ -572,7 +598,6 @@ def test_part_no_VRT():
     ]  # boundless part
     # Read part at full resolution
     with rasterio.open(COG) as src_dst:
-
         bounds_dst_crs = transform_bounds(
             "epsg:4326", src_dst.crs, *bounds, densify_pts=21
         )
@@ -632,3 +657,196 @@ def test_part_no_VRT():
         assert img_pad.bounds == bounds_dst_crs
         # Padding should not have any influence when not doing any rescaling/reprojection
         numpy.array_equal(img_pad.data, img.data)
+
+        # Read bbox smaller than one pixel
+        bounds_small = [bounds[0], bounds[1], bounds[0] + 1e-6, bounds[1] + 1e-6]
+        bounds_small_dst_crs = transform_bounds("epsg:4326", src_dst.crs, *bounds_small)
+        img_small = reader.part(src_dst, bounds_small, bounds_crs="epsg:4326")
+        assert img_small.height == 1
+        assert img_small.width == 1
+        assert_array_almost_equal(img_small.bounds, bounds_small_dst_crs)
+
+
+@pytest.mark.parametrize(
+    "bounds,crs",
+    [
+        (
+            (
+                -56.624124590533825,
+                73.50183615350426,
+                -56.530950796449005,
+                73.52687881825946,
+            ),
+            "epsg:32621",
+        ),  # Case 1 - square bounds within dataset
+        (
+            (
+                -62.841631140841685,
+                73.15163488990189,
+                -60.36648908847309,
+                73.97773652099218,
+            ),
+            "epsg:32621",
+        ),  # Case 2 - boundless (left)
+        (
+            (
+                -52.927554190740736,
+                73.3960640725901,
+                -51.96837664926392,
+                73.77350422465656,
+            ),
+            "epsg:32621",
+        ),  # Case 3 - boundless (right)
+        (
+            (
+                -57.15027188947926,
+                74.56177365126999,
+                -56.37556339673152,
+                74.75029925196495,
+            ),
+            "epsg:32621",
+        ),  # Case 4 - boundless (top)
+        (
+            (
+                -55.86202533996874,
+                71.8988448629112,
+                -54.6335972683694,
+                72.28789003457715,
+            ),
+            "epsg:32621",
+        ),  # Case 5 - boundless (bottom)
+        (
+            (
+                -62.968685159182414,
+                71.95907543637196,
+                -51.60091205568341,
+                74.78461407516858,
+            ),
+            "epsg:32621",
+        ),  # Case 6 - boundless whole raster
+        (
+            (
+                -66.79529480522785,
+                74.22513769476188,
+                -65.89488418613195,
+                74.48258818252089,
+            ),
+            "epsg:32621",
+        ),  # Case 7 - outside bounds
+        # With Reprojection
+        (
+            (
+                -56.624124590533825,
+                73.50183615350426,
+                -56.530950796449005,
+                73.52687881825946,
+            ),
+            "epsg:4326",
+        ),  # Case 1 - square bounds within dataset
+        (
+            (
+                -62.841631140841685,
+                73.15163488990189,
+                -60.36648908847309,
+                73.97773652099218,
+            ),
+            "epsg:4326",
+        ),  # Case 2 - boundless (left)
+        (
+            (
+                -52.927554190740736,
+                73.3960640725901,
+                -51.96837664926392,
+                73.77350422465656,
+            ),
+            "epsg:4326",
+        ),  # Case 3 - boundless (right)
+        (
+            (
+                -57.15027188947926,
+                74.56177365126999,
+                -56.37556339673152,
+                74.75029925196495,
+            ),
+            "epsg:4326",
+        ),  # Case 4 - boundless (top)
+        (
+            (
+                -55.86202533996874,
+                71.8988448629112,
+                -54.6335972683694,
+                72.28789003457715,
+            ),
+            "epsg:4326",
+        ),  # Case 5 - boundless (bottom)
+        (
+            (
+                -62.968685159182414,
+                71.95907543637196,
+                -51.60091205568341,
+                74.78461407516858,
+            ),
+            "epsg:4326",
+        ),  # Case 6 - boundless whole raster
+        (
+            (
+                -66.79529480522785,
+                74.22513769476188,
+                -65.89488418613195,
+                74.48258818252089,
+            ),
+            "epsg:4326",
+        ),  # Case 7 - outside bounds
+    ],
+)
+def test_part_align_transform(bounds, crs):
+    """test `align_bounds_with_dataset` option."""
+    with rasterio.open(COG) as src_dst:
+        img = reader.part(
+            src_dst,
+            bounds,
+            dst_crs=crs,
+            bounds_crs="epsg:4326",
+            align_bounds_with_dataset=True,
+        )
+        img_default = reader.part(
+            src_dst,
+            bounds,
+            dst_crs=crs,
+            bounds_crs="epsg:4326",
+            align_bounds_with_dataset=False,
+        )
+        assert not img.array.shape == img_default.array.shape
+        assert not img.bounds == img_default.bounds
+
+        # output image aligned with bounds should have the origin
+        # with the bounds UL
+        if crs != WGS84_CRS:
+            bounds = transform_bounds(WGS84_CRS, crs, *bounds, densify_pts=21)
+
+        assert round(img_default.transform.c, 5) == round(bounds[0], 5)
+        assert round(img_default.transform.f, 5) == round(bounds[3], 5)
+
+        # output image bounds aligned to the dataset transform should have the origin
+        # with the bounds greater than UL
+        assert img.transform.c < bounds[0]
+        assert img.transform.f > bounds[3]
+
+
+def test_nodata_orverride():
+    """Make sure notata override."""
+    with rasterio.open(COG_NODATA) as src_dst:
+        prev = reader.read(src_dst, max_size=100)
+        assert prev.mask[0, 0] == 0
+
+        prev = reader.read(src_dst, max_size=100, nodata=2720)
+        assert prev.mask[0, 0] == 255
+        assert not numpy.all(prev.mask)
+
+
+def test_tile_read_nodata_float():
+    """Should work as expected when using NaN as nodata value."""
+    with rasterio.open(COG_NODATA_FLOAT_NAN) as src_dst:
+        prev = reader.read(src_dst, max_size=100)
+        assert prev.mask[0, 0] == 0
+        assert not numpy.all(prev.mask)

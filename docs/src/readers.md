@@ -266,7 +266,7 @@ with Reader("myfile.tif") as src:
     info = src.info()
     assert isinstance(info, Info)
 
-print(info.dict(exclude_none=True))
+print(info.model_dump(exclude_none=True))
 >>> {
     "bounds": [-119.05915661478785, 13.102845359730287, -84.91821332299578, 33.995073647795806],
     "minzoom": 3,
@@ -306,7 +306,7 @@ print(stats)
     'b3': BandStatistics(...)
 }
 
-print(stats["b1"].dict())
+print(stats["b1"].model_dump())
 >>> {
     "min": 1,
     "max": 7872,
@@ -338,7 +338,7 @@ print(stats)
     'b1': BandStatistics(...)
 }
 # For categorical data, the histogram will represent the density of EACH value.
-print(stats["b1"].dict())
+print(stats["b1"].model_dump())
 >>> {
     ...
     "histogram": [
@@ -922,7 +922,7 @@ with ImageReader("image.jpeg") as src:
     info = src.info()
     assert isinstance(info, Info)
 
-print(info.dict(exclude_none=True))
+print(info.model_dump(exclude_none=True))
 >>> {
     "bounds": [0, 4000, 4000, 0],
     "minzoom": 0,
@@ -962,7 +962,7 @@ print(stats)
     'b3': BandStatistics(...)
 }
 
-print(stats["b1"].dict())
+print(stats["b1"].model_dump())
 >>> {
     "min": 1,
     "max": 7872,
@@ -1059,12 +1059,12 @@ EPSG:4326
 - **tile()**: Read map tile from a raster
 
 ```python
-from rio_tiler.contants import WEB_MERCATOR_CRS
+from rio_tiler.constants import WEB_MERCATOR_CRS
 from rio_tiler.io import XarrayReader
 from rio_tiler.models import ImageData
 
 with XarrayReader(data) as src:
-    # src.tile(tile_x, tile_y, tile_z, tilesize, resampling_method)
+    # src.tile(tile_x, tile_y, tile_z, tilesize, reproject_method)
     img = src.tile(1, 2, 3)
     assert isinstance(img, ImageData)
     assert img.crs == WEB_MERCATOR_CRS
@@ -1077,7 +1077,7 @@ from rio_tiler.io import XarrayReader
 from rio_tiler.models import ImageData
 
 with XarrayReader(data) as src:
-    # src.part((minx, miny, maxx, maxy), dst_crs, bounds_crs, resampling_method)
+    # src.part((minx, miny, maxx, maxy), dst_crs, bounds_crs, reproject_method)
     img = src.part((10, 10, 20, 20))
     assert isinstance(img, ImageData)
     assert img.crs == WGS84_CRS

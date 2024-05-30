@@ -7,6 +7,7 @@ import numpy
 import pytest
 import rasterio
 from rasterio.crs import CRS
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.io import MemoryFile
 
 from rio_tiler.errors import InvalidDatatypeWarning, InvalidPointDataError
@@ -72,6 +73,11 @@ def test_16bit_PNG():
     mask[0:10, 0:10] = True
 
     with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=NotGeoreferencedWarning,
+            module="rasterio",
+        )
         arr = numpy.ma.MaskedArray(numpy.zeros((1, 256, 256), dtype="uint16"))
         arr.mask = mask.copy()
         img = ImageData(arr).render(img_format="PNG")
@@ -86,6 +92,11 @@ def test_16bit_PNG():
             assert (arr[11:, 11:] == 65535).all()
 
     with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=NotGeoreferencedWarning,
+            module="rasterio",
+        )
         arr = numpy.ma.MaskedArray(numpy.zeros((3, 256, 256), dtype="uint16"))
         arr.mask = mask.copy()
         img = ImageData(arr).render(img_format="PNG")
@@ -413,3 +424,74 @@ def test_2d_image():
     assert im.width == 256
     assert im.height == 256
     assert im.mask.all()
+
+
+def test_apply_color_formula():
+    """Test Apply color_formula."""
+    data = numpy.random.randint(0, 16000, (3, 256, 256)).astype("uint16")
+    img = ImageData(data)
+    assert img.data.dtype == "uint16"
+
+    img.apply_color_formula(
+        "gamma b 1.85, gamma rg 1.95, sigmoidal rgb 35 0.13, saturation 1.15"
+    )
+    assert img.data.dtype == "uint8"
+    assert img.count == 3
+    assert img.width == 256
+    assert img.height == 256
+
+
+def test_imagedata_coverage():
+    """test coverage array."""
+    im = ImageData(
+        numpy.ma.array((1, 2, 3, 4)).reshape((1, 2, 2)),
+        crs="epsg:4326",
+        bounds=(-180, -90, 180, 90),
+    )
+    poly = {
+        "type": "Polygon",
+        "coordinates": [
+            [[-90.0, -45.0], [90.0, -45.0], [90.0, 45.0], [-90.0, 45.0], [-90.0, -45.0]]
+        ],
+    }
+    coverage = im.get_coverage_array(poly)
+    assert numpy.unique(coverage).tolist() == [0.25]
+
+    coverage = im.get_coverage_array({"type": "Feature", "geometry": poly})
+    assert numpy.unique(coverage).tolist() == [0.25]
+
+    # non-default CRS
+    poly = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                (-10018754.171394622, -5621521.486192066),
+                (10018754.171394622, -5621521.486192066),
+                (10018754.171394622, 5621521.486192066),
+                (-10018754.171394622, 5621521.486192066),
+                (-10018754.171394622, -5621521.486192066),
+            ]
+        ],
+    }
+
+    coverage = im.get_coverage_array(poly, shape_crs="epsg:3857")
+    assert numpy.unique(coverage).tolist() == [0.25]
+
+    coverage = im.get_coverage_array(
+        {"type": "Feature", "geometry": poly}, shape_crs="epsg:3857"
+    )
+    assert numpy.unique(coverage).tolist() == [0.25]
+
+    # polygon with diagonal cut - requires higher cover_scale
+    im = ImageData(
+        numpy.ma.array((1, 2, 3, 4)).reshape((1, 2, 2)),
+        crs="epsg:4326",
+        bounds=(-180, -90, 180, 90),
+    )
+    poly = {
+        "type": "Polygon",
+        "coordinates": [[[-90.0, -45.0], [90.0, -45.0], [-90.0, 45.0], [-90.0, -45.0]]],
+    }
+
+    coverage = im.get_coverage_array(poly, cover_scale=1000)
+    assert numpy.round(numpy.unique(coverage), decimals=3).tolist() == [0, 0.125, 0.25]

@@ -1,13 +1,17 @@
 """tests rio_tiler.utils"""
 
+import json
 import math
 import os
+import warnings
 from io import BytesIO
 
 import numpy as np
 import pytest
 import rasterio
+from rasterio.crs import CRS
 from rasterio.enums import ColorInterp
+from rasterio.errors import NotGeoreferencedWarning
 from rasterio.features import bounds as featureBounds
 from rasterio.io import MemoryFile
 
@@ -457,6 +461,8 @@ def test_get_array_statistics():
         "masked_pixels",
         "valid_percent",
     ]
+    # Make sure the statistics object are JSON serializable
+    assert json.dumps(stats[0])
 
     stats = utils.get_array_statistics(arr, percentiles=[2, 3, 4])
     assert "percentile_2" in stats[0]
@@ -516,9 +522,15 @@ def test_render_colorinterp():
     """Save data to numpy binary."""
 
     def parse(content):
-        with MemoryFile(content) as mem:
-            with mem.open() as dst:
-                return dst.profile, dst.colorinterp
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=NotGeoreferencedWarning,
+                module="rasterio",
+            )
+            with MemoryFile(content) as mem:
+                with mem.open() as dst:
+                    return dst.profile, dst.colorinterp
 
     arr = np.random.randint(0, 255, size=(3, 512, 512), dtype=np.uint8)
     mask = np.zeros((512, 512), dtype=np.uint8)
@@ -553,3 +565,85 @@ def test_render_colorinterp():
     assert ColorInterp.alpha in color
     assert ColorInterp.red not in color
     assert ColorInterp.gray in color
+
+
+def test_get_array_statistics_coverage():
+    """Test statistics with coverage array."""
+    # same test as https://github.com/isciences/exactextract?tab=readme-ov-file#supported-statistics
+    # Data Array
+    # 1, 2
+    # 3, 4
+    data = np.ma.array((1, 2, 3, 4)).reshape((1, 2, 2))
+
+    # Coverage Array
+    # 0.5, 0
+    # 1, 0.25
+    coverage = np.array((0.5, 0, 1, 0.25)).reshape((2, 2))
+
+    stats = utils.get_array_statistics(data, coverage=coverage)
+    assert len(stats) == 1
+    assert stats[0]["min"] == 1
+    assert stats[0]["max"] == 4
+    assert (
+        round(stats[0]["mean"], 4) == 2.5714
+    )  # sum of weighted array / sum of weights | 4.5 / 1.75 = 2.57
+    assert stats[0]["count"] == 1.75
+    assert stats[0]["median"] == 3  # 2 in exactextract
+    assert round(stats[0]["std"], 2) == 1.05
+
+    stats = utils.get_array_statistics(data)
+    assert len(stats) == 1
+    assert stats[0]["min"] == 1
+    assert stats[0]["max"] == 4
+    assert stats[0]["mean"] == 2.5
+    assert stats[0]["count"] == 4
+
+    # same test as https://github.com/isciences/exactextract/blob/0883cd585d9c7b6b4e936aeca4aa84a15adf82d2/python/tests/test_exact_extract.py#L48-L110
+    data = np.ma.arange(1, 10, dtype=np.int32).reshape(3, 3)
+    coverage = np.array([0.25, 0.5, 0.25, 0.5, 1.0, 0.5, 0.25, 0.5, 0.25]).reshape(3, 3)
+    stats = utils.get_array_statistics(data, coverage=coverage, percentiles=[25, 75])
+    assert len(stats) == 1
+    assert stats[0]["count"] == 4
+    assert stats[0]["mean"] == 5
+    assert stats[0]["median"] == 5
+    assert stats[0]["min"] == 1
+    assert stats[0]["max"] == 9
+    # exactextract takes coverage into account, we don't
+    assert stats[0]["minority"] == 1  # 1 in exactextract
+    assert stats[0]["majority"] == 1  # 5 in exactextract
+    assert stats[0]["percentile_25"] == 3
+    assert stats[0]["percentile_75"] == 6
+    assert stats[0]["std"] == math.sqrt(5)
+
+
+def test_get_vrt_transform_world_file(dataset_fixture):
+    """Should return correct transform and size."""
+    bounds = (
+        -17811118.526923772,
+        -6446275.841017159,
+        17811118.526923772,
+        6446275.841017159,
+    )
+    with MemoryFile(
+        dataset_fixture(
+            crs=CRS.from_epsg(4326),
+            bounds=(-180.0, -90, 180.0, 90.0),
+            dtype="uint8",
+            nodata_type="nodata",
+            width=720,
+            height=360,
+        )
+    ) as memfile:
+        with memfile.open() as src_dst:
+            # adjusting latitudes
+            # with pytest.warns(UserWarning):
+            vrt_transform, vrt_width, vrt_height = utils.get_vrt_transform(
+                src_dst,
+                bounds,
+                dst_crs="epsg:3857",
+            )
+
+    assert vrt_transform[2] == -17811118.526923772
+    assert vrt_transform[5] == 6446275.841017159
+    assert vrt_width == 501  # 59 without the latitude adjust patch
+    assert vrt_height == 181  # 21 without the latitude adjust patch
