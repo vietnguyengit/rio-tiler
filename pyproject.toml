@@ -26,11 +26,12 @@ dependencies = [
     "httpx",
     "numexpr",
     "numpy",
-    "morecantile>=5.0,<6.0",
+    "morecantile>=5.0,<7.0",
     "pydantic~=2.0",
     "pystac>=0.5.4",
     "rasterio>=1.3.0",
     "color-operations",
+    "typing-extensions",
     "importlib_resources>=1.1.0; python_version < '3.9'",
 ]
 
@@ -42,8 +43,11 @@ test = [
     # XarrayReader
     "xarray",
     "rioxarray",
+    "h5netcdf",
     # S3
     "boto3",
+    # Some tests will fail with 5.0
+    "morecantile>=6.0,<7.0",
 ]
 
 benchmark = [
@@ -58,6 +62,7 @@ tilebench = [
 
 dev = [
     "pre-commit",
+    "bump-my-version",
 ]
 s3 = [
     "boto3",
@@ -67,10 +72,11 @@ xarray = [
     "rioxarray",
 ]
 docs = [
-    "nbconvert",
-    "mkdocs",
-    "mkdocs-jupyter",
-    "mkdocs-material",
+    "mkdocs>=1.4.3",
+    "mkdocs-jupyter>=0.24.5",
+    "mkdocs-material[imaging]>=9.5",
+    "griffe-inherited-docstrings>=1.0.0",
+    "mkdocstrings[python]>=0.25.1",
     "pygments",
 ]
 
@@ -150,3 +156,17 @@ ignore = [
 
 [tool.ruff.lint.mccabe]
 max-complexity = 14
+
+[tool.bumpversion]
+current_version = "7.2.1"
+search = "{current_version}"
+replace = "{new_version}"
+regex = false
+tag = true
+commit = true
+tag_name = "{new_version}"
+
+[[tool.bumpversion.files]]
+filename = "rio_tiler/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'

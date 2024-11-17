@@ -35,6 +35,7 @@ COG_NODATA = os.path.join(os.path.dirname(__file__), "fixtures", "cog_nodata.tif
 COG_NODATA_FLOAT_NAN = os.path.join(
     os.path.dirname(__file__), "fixtures", "cog_nodata_float_nan.tif"
 )
+COG_INVERTED = os.path.join(os.path.dirname(__file__), "fixtures", "inverted_lat.tif")
 
 
 @pytest.fixture(autouse=True)
@@ -494,6 +495,70 @@ def test_part_with_buffer():
     numpy.array_equal(img_no_buffer.data, img.data[:, 2:-2, 2:-2])
 
 
+def test_part_with_buffer_overzoom():
+    """Make sure buffer works as expected."""
+    bounds = [
+        -6574807.42497772,
+        12210356.646387195,
+        -6261721.357121638,
+        12523442.714243278,
+    ]
+    # Read part at full resolution
+    with rasterio.open(COG) as src_dst:
+        img_no_buffer = reader.part(
+            src_dst,
+            bounds,
+            dst_crs=constants.WEB_MERCATOR_CRS,
+            height=2000,
+            width=2000,
+        )
+
+    x_size = img_no_buffer.width
+    y_size = img_no_buffer.height
+
+    x_res = (bounds[2] - bounds[0]) / x_size
+    y_res = (bounds[3] - bounds[1]) / y_size
+
+    nx = x_size + 4
+    ny = y_size + 4
+
+    # apply a 2 pixel buffer
+    bounds_with_buffer = (
+        bounds[0] - x_res * 2,
+        bounds[1] - y_res * 2,
+        bounds[2] + x_res * 2,
+        bounds[3] + y_res * 2,
+    )
+    with rasterio.open(COG) as src_dst:
+        img = reader.part(
+            src_dst,
+            bounds_with_buffer,
+            height=ny,
+            width=nx,
+            dst_crs=constants.WEB_MERCATOR_CRS,
+        )
+        assert img.width == nx
+        assert img.height == ny
+
+    with rasterio.open(COG) as src_dst:
+        imgb = reader.part(
+            src_dst,
+            bounds,
+            buffer=2,
+            dst_crs=constants.WEB_MERCATOR_CRS,
+            height=2000,
+            width=2000,
+        )
+        assert imgb.width == nx
+        assert imgb.height == ny
+
+    assert numpy.array_equal(img.data, imgb.data)
+    assert img.bounds == imgb.bounds
+
+    numpy.array_equal(img_no_buffer.data, imgb.data[:, 2:-2, 2:-2])
+    numpy.array_equal(img_no_buffer.data, img.data[:, 2:-2, 2:-2])
+
+
 def test_read():
     """Test reader.read function."""
     with rasterio.open(COG) as src:
@@ -850,3 +915,11 @@ def test_tile_read_nodata_float():
         prev = reader.read(src_dst, max_size=100)
         assert prev.mask[0, 0] == 0
         assert not numpy.all(prev.mask)
+
+
+def test_inverted_latitude_point():
+    """Make sure we can read a point from a file with inverted latitude."""
+    with pytest.warns(UserWarning):
+        with rasterio.open(COG_INVERTED) as src_dst:
+            pt = reader.point(src_dst, [-104.77519499, 38.95367054])
+            assert pt.data[0] == -9999.0

@@ -1,6 +1,6 @@
 """rio-tiler types."""
 
-from typing import Dict, Literal, Optional, Sequence, Tuple, TypedDict, Union
+from typing import Any, Dict, Literal, Optional, Sequence, Tuple, TypedDict, Union
 
 import numpy
 
@@ -18,11 +18,15 @@ IntervalTuple = Tuple[NumType, NumType]  # (0, 100)
 # ColorMap Dict: {1: (0, 0, 0, 255), ...}
 GDALColorMapType = Dict[int, ColorTuple]
 
+# Discrete Colormap, like GDALColorMapType but accept Float: {0.1: (0, 0, 0, 255), ...}
+DiscreteColorMapType = Dict[NumType, ColorTuple]
+
 # Intervals ColorMap: [((0, 1), (0, 0, 0, 0)), ...]
 IntervalColorMapType = Sequence[Tuple[IntervalTuple, ColorTuple]]
 
 ColorMapType = Union[
     GDALColorMapType,
+    DiscreteColorMapType,
     IntervalColorMapType,
 ]
 
@@ -58,7 +62,8 @@ WarpResampling = Literal[
 class AssetInfo(TypedDict, total=False):
     """Asset Reader Options."""
 
-    url: str
+    url: Any
+    media_type: str
     env: Optional[Dict]
     metadata: Optional[Dict]
     dataset_statistics: Optional[Sequence[Tuple[float, float]]]

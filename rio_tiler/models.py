@@ -21,6 +21,7 @@ from rasterio.io import MemoryFile
 from rasterio.plot import reshape_as_image
 from rasterio.transform import from_bounds
 from rasterio.warp import transform_geom
+from typing_extensions import Self
 
 from rio_tiler.colormap import apply_cmap
 from rio_tiler.constants import WGS84_CRS
@@ -44,32 +45,14 @@ from rio_tiler.utils import (
 )
 
 
-class RioTilerBaseModel(BaseModel):
-    """Provides dictionary access for pydantic models, for backwards compatability."""
-
-    def __getitem__(self, item):
-        """Access item like in Dict."""
-        warnings.warn(
-            "'key' access will has been deprecated and will be removed in rio-tiler 7.0.",
-            DeprecationWarning,
-        )
-        return {**self.__dict__, **self.__pydantic_extra__}[item]
-
-
-class Bounds(RioTilerBaseModel):
+class Bounds(BaseModel):
     """Dataset Bounding box"""
 
-    bounds: BoundingBox
+    bounds: BBox
+    crs: str
 
 
-class SpatialInfo(Bounds):
-    """Dataset SpatialInfo"""
-
-    minzoom: int
-    maxzoom: int
-
-
-class Info(SpatialInfo):
+class Info(Bounds):
     """Dataset Info."""
 
     band_metadata: List[Tuple[str, Dict]]
@@ -84,7 +67,7 @@ class Info(SpatialInfo):
     model_config = {"extra": "allow"}
 
 
-class BandStatistics(RioTilerBaseModel):
+class BandStatistics(BaseModel):
     """Band statistics"""
 
     min: float
@@ -218,7 +201,7 @@ class PointData:
         return self.array.shape[0]
 
     @classmethod
-    def create_from_list(cls, data: Sequence["PointData"]):
+    def create_from_list(cls, data: Sequence["PointData"]) -> Self:
         """Create PointData from a sequence of PointsData objects.
 
         Args:
@@ -262,15 +245,6 @@ class PointData:
             band_names=band_names,
             metadata=metadata,
         )
-
-    def as_masked(self) -> numpy.ma.MaskedArray:
-        """return a numpy masked array."""
-        warnings.warn(
-            "'PointData.as_masked' has been deprecated and will be removed"
-            "in rio-tiler 7.0. You can get the masked array directly with `PointData.array` attribute.",
-            DeprecationWarning,
-        )
-        return self.array
 
     def apply_expression(self, expression: str) -> "PointData":
         """Apply expression to the image data."""
@@ -361,22 +335,7 @@ class ImageData:
             yield i
 
     @classmethod
-    def from_array(cls, arr: numpy.ndarray) -> "ImageData":
-        """Create ImageData from a numpy array.
-
-        Args:
-            arr (numpy.ndarray): Numpy array or Numpy masked array.
-
-        """
-        warnings.warn(
-            "'ImageData.from_array()' has been deprecated and will be removed"
-            "in rio-tiler 7.0.",
-            DeprecationWarning,
-        )
-        return cls(arr)
-
-    @classmethod
-    def from_bytes(cls, data: bytes) -> "ImageData":
+    def from_bytes(cls, data: bytes) -> Self:
         """Create ImageData from bytes.
 
         Args:
@@ -425,7 +384,7 @@ class ImageData:
                     )
 
     @classmethod
-    def create_from_list(cls, data: Sequence["ImageData"]) -> "ImageData":
+    def create_from_list(cls, data: Sequence["ImageData"]) -> Self:
         """Create ImageData from a sequence of ImageData objects.
 
         Args:
@@ -498,15 +457,6 @@ class ImageData:
             metadata=metadata,
         )
 
-    def as_masked(self) -> numpy.ma.MaskedArray:
-        """return a numpy masked array."""
-        warnings.warn(
-            "'ImageData.as_masked' has been deprecated and will be removed"
-            "in rio-tiler 7.0. You can get the masked array directly with `ImageData.array` attribute.",
-            DeprecationWarning,
-        )
-        return self.array
-
     def data_as_image(self) -> numpy.ndarray:
         """Return the data array reshaped into an image processing/visualization software friendly order.
 
@@ -531,7 +481,7 @@ class ImageData:
         return self.array.shape[0]
 
     @property
-    def transform(self):
+    def transform(self) -> Affine:
         """Returns the affine transform."""
         return (
             from_bounds(*self.bounds, self.width, self.height)
@@ -544,7 +494,7 @@ class ImageData:
         in_range: Sequence[IntervalTuple],
         out_range: Sequence[IntervalTuple] = ((0, 255),),
         out_dtype: Union[str, numpy.number] = "uint8",
-    ):
+    ) -> Self:
         """Rescale data in place."""
         self.array = rescale_image(
             self.array.copy(),
@@ -552,6 +502,7 @@ class ImageData:
             out_range=out_range,
             out_dtype=out_dtype,
         )
+        return self
 
     def apply_colormap(self, colormap: ColorMapType) -> "ImageData":
         """Apply colormap to the image data."""
@@ -570,7 +521,7 @@ class ImageData:
             metadata=self.metadata,
         )
 
-    def apply_color_formula(self, color_formula: Optional[str]):
+    def apply_color_formula(self, color_formula: Optional[str]) -> Self:
         """Apply color-operations formula in place."""
         out = self.array.data.copy()
         out[out < 0] = 0
@@ -581,6 +532,7 @@ class ImageData:
         data = numpy.ma.MaskedArray(out)
         data.mask = self.array.mask
         self.array = data
+        return self
 
     def apply_expression(self, expression: str) -> "ImageData":
         """Apply expression to the image data."""
@@ -796,9 +748,8 @@ class ImageData:
         """Post-process image data.
 
         Args:
-            in_range (tuple): input min/max bounds value to rescale from.
-            out_dtype (str, optional): output datatype after rescaling. Defaults to `uint8`.
-            color_formula (str, optional): color-ops formula (see: https://github.com/vincentsarago/color-ops).
+            shape (Dict): GeoJSON geometry or Feature.
+            shape_crs (rasterio.crs.CRS): Coordinates Reference System of shape.
             cover_scale (int, optional):
                 Scale used when generating coverage estimates of each
                 raster cell by vector feature. Coverage is generated by

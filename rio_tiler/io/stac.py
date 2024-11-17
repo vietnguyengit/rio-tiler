@@ -3,7 +3,18 @@
 import json
 import os
 import warnings
-from typing import Any, Dict, Iterator, Optional, Set, Type, Union
+from typing import (
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Type,
+    Union,
+)
 from urllib.parse import urlparse
 
 import attr
@@ -13,7 +24,7 @@ import rasterio
 from cachetools import LRUCache, cached
 from cachetools.keys import hashkey
 from morecantile import TileMatrixSet
-from rasterio.crs import CRS
+from rasterio.transform import array_bounds
 
 from rio_tiler.constants import WEB_MERCATOR_TMS, WGS84_CRS
 from rio_tiler.errors import InvalidAssetName, MissingAssets
@@ -40,6 +51,8 @@ DEFAULT_VALID_TYPE = {
     "application/x-hdf5",
     "application/x-hdf",
 }
+
+STAC_ALTERNATE_KEY = os.environ.get("RIO_TILER_STAC_ALTERNATE_KEY", None)
 
 
 def aws_get_object(
@@ -173,7 +186,7 @@ def _to_pystac_item(item: Union[None, Dict, pystac.Item]) -> Union[None, pystac.
     """Attr converter to convert to Dict to pystac.Item
 
     Args:
-        stac_item (Union[Dict, pystac.Item]): STAC Item.
+        item (Union[Dict, pystac.Item]): STAC Item.
 
     Returns
         pystac.Item: pystac STAC item object.
@@ -195,11 +208,11 @@ class STACReader(MultiBaseReader):
         tms (morecantile.TileMatrixSet, optional): TileMatrixSet grid definition. Defaults to `WebMercatorQuad`.
         minzoom (int, optional): Set minzoom for the tiles.
         maxzoom (int, optional): Set maxzoom for the tiles.
-        geographic_crs (rasterio.crs.CRS, optional): CRS to use as geographic coordinate system. Defaults to WGS84.
         include_assets (set of string, optional): Only Include specific assets.
         exclude_assets (set of string, optional): Exclude specific assets.
         include_asset_types (set of string, optional): Only include some assets base on their type.
         exclude_asset_types (set of string, optional): Exclude some assets base on their type.
+        default_assets (list of string, optional): Default assets to use if none are defined.
         reader (rio_tiler.io.BaseReader, optional): rio-tiler Reader. Defaults to `rio_tiler.io.Reader`.
         reader_options (dict, optional): Additional option to forward to the Reader. Defaults to `{}`.
         fetch_options (dict, optional): Options to pass to `rio_tiler.io.stac.fetch` function fetching the STAC Items. Defaults to `{}`.
@@ -227,10 +240,8 @@ class STACReader(MultiBaseReader):
     item: pystac.Item = attr.ib(default=None, converter=_to_pystac_item)
 
     tms: TileMatrixSet = attr.ib(default=WEB_MERCATOR_TMS)
-    minzoom: int = attr.ib()
-    maxzoom: int = attr.ib()
-
-    geographic_crs: CRS = attr.ib(default=WGS84_CRS)
+    minzoom: int = attr.ib(default=None)
+    maxzoom: int = attr.ib(default=None)
 
     include_assets: Optional[Set[str]] = attr.ib(default=None)
     exclude_assets: Optional[Set[str]] = attr.ib(default=None)
@@ -238,12 +249,15 @@ class STACReader(MultiBaseReader):
     include_asset_types: Set[str] = attr.ib(default=DEFAULT_VALID_TYPE)
     exclude_asset_types: Optional[Set[str]] = attr.ib(default=None)
 
+    assets: Sequence[str] = attr.ib(init=False)
+    default_assets: Optional[Sequence[str]] = attr.ib(default=None)
+
     reader: Type[BaseReader] = attr.ib(default=Reader)
     reader_options: Dict = attr.ib(factory=dict)
 
     fetch_options: Dict = attr.ib(factory=dict)
 
-    ctx: Any = attr.ib(default=rasterio.Env)
+    ctx: rasterio.Env = attr.ib(default=rasterio.Env)
 
     def __attrs_post_init__(self):
         """Fetch STAC Item and get list of valid assets."""
@@ -251,11 +265,32 @@ class STACReader(MultiBaseReader):
             fetch(self.input, **self.fetch_options), self.input
         )
 
-        # TODO: get bounds/crs using PROJ extension if available
-        self.bounds = self.item.bbox
+        self.bounds = tuple(self.item.bbox)
         self.crs = WGS84_CRS
 
-        self.assets = list(
+        if hasattr(self.item, "ext") and self.item.ext.has("proj"):
+            if all(
+                [
+                    self.item.ext.proj.transform,
+                    self.item.ext.proj.shape,
+                    self.item.ext.proj.crs_string,
+                ]
+            ):
+                self.height, self.width = self.item.ext.proj.shape
+                self.transform = self.item.ext.proj.transform
+                self.bounds = array_bounds(self.height, self.width, self.transform)
+                self.crs = rasterio.crs.CRS.from_string(self.item.ext.proj.crs_string)
+
+        self.minzoom = self.minzoom if self.minzoom is not None else self._minzoom
+        self.maxzoom = self.maxzoom if self.maxzoom is not None else self._maxzoom
+
+        self.assets = self.get_asset_list()
+        if not self.assets:
+            raise MissingAssets("No valid asset found. Asset's media types not supported")
+
+    def get_asset_list(self) -> List[str]:
+        """Get valid asset list"""
+        return list(
             _get_assets(
                 self.item,
                 include=self.include_assets,
@@ -264,27 +299,39 @@ class STACReader(MultiBaseReader):
                 exclude_asset_types=self.exclude_asset_types,
             )
         )
-        if not self.assets:
-            raise MissingAssets("No valid asset found. Asset's media types not supported")
 
-    @minzoom.default
-    def _minzoom(self):
-        return self.tms.minzoom
+    def _get_reader(self, asset_info: AssetInfo) -> Tuple[Type[BaseReader], Dict]:
+        """Get Asset Reader."""
+        return self.reader, {}
 
-    @maxzoom.default
-    def _maxzoom(self):
-        return self.tms.maxzoom
+    def _parse_vrt_asset(self, asset: str) -> Tuple[str, Optional[str]]:
+        if asset.startswith("vrt://") and asset not in self.assets:
+            parsed = urlparse(asset)
+            if not parsed.netloc:
+                raise InvalidAssetName(
+                    f"'{asset}' is not valid, couldn't find valid asset"
+                )
+
+            if parsed.netloc not in self.assets:
+                raise InvalidAssetName(
+                    f"'{parsed.netloc}' is not valid, should be one of {self.assets}"
+                )
+
+            return parsed.netloc, parsed.query
+
+        return asset, None
 
     def _get_asset_info(self, asset: str) -> AssetInfo:
-        """Validate asset names and return asset's url.
+        """Validate asset names and return asset's info.
 
         Args:
             asset (str): STAC asset name.
 
         Returns:
-            str: STAC asset href.
+            AssetInfo: STAC asset info.
 
         """
+        asset, vrt_options = self._parse_vrt_asset(asset)
         if asset not in self.assets:
             raise InvalidAssetName(
                 f"'{asset}' is not valid, should be one of {self.assets}"
@@ -295,13 +342,23 @@ class STACReader(MultiBaseReader):
 
         info = AssetInfo(
             url=asset_info.get_absolute_href() or asset_info.href,
-            metadata=extras,
+            metadata=extras if not vrt_options else None,
         )
 
+        if STAC_ALTERNATE_KEY and extras.get("alternate"):
+            if alternate := extras["alternate"].get(STAC_ALTERNATE_KEY):
+                info["url"] = alternate["href"]
+
+        if asset_info.media_type:
+            info["media_type"] = asset_info.media_type
+
+        # https://github.com/stac-extensions/file
         if head := extras.get("file:header_size"):
             info["env"] = {"GDAL_INGESTED_BYTES_AT_OPEN": head}
 
-        if bands := extras.get("raster:bands"):
+        # https://github.com/stac-extensions/raster
+        if extras.get("raster:bands") and not vrt_options:
+            bands = extras.get("raster:bands")
             stats = [
                 (b["statistics"]["minimum"], b["statistics"]["maximum"])
                 for b in bands
@@ -318,5 +375,8 @@ class STACReader(MultiBaseReader):
                 warnings.warn(
                     "Some statistics data in STAC are invalid, they will be ignored."
                 )
+
+        if vrt_options:
+            info["url"] = f"vrt://{info['url']}?{vrt_options}"
 
         return info

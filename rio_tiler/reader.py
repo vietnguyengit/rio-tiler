@@ -23,6 +23,7 @@ from rio_tiler.types import BBox, Indexes, NoData, RIOResampling, WarpResampling
 from rio_tiler.utils import _requested_tile_aligned_with_internal_tile as is_aligned
 from rio_tiler.utils import (
     _round_window,
+    cast_to_sequence,
     get_vrt_transform,
     has_alpha_band,
     non_alpha_indexes,
@@ -120,8 +121,7 @@ def read(
         ImageData
 
     """
-    if isinstance(indexes, int):
-        indexes = (indexes,)
+    indexes = cast_to_sequence(indexes)
 
     if max_size and width and height:
         warnings.warn(
@@ -199,7 +199,9 @@ def read(
                 values = dataset.read(
                     indexes=indexes,
                     window=window,
-                    out_shape=(len(indexes), height, width) if height and width else None,
+                    out_shape=(
+                        (len(indexes), height, width) if height and width else None
+                    ),
                     resampling=io_resampling,
                     boundless=boundless,
                 )
@@ -527,8 +529,7 @@ def point(
         PointData
 
     """
-    if isinstance(indexes, int):
-        indexes = (indexes,)
+    indexes = cast_to_sequence(indexes)
 
     with contextlib.ExitStack() as ctx:
         # Use WarpedVRT when User provided Nodata or VRT Option (cutline)
@@ -559,9 +560,23 @@ def point(
             xs, ys = transform_coords(coord_crs, dataset.crs, [lon], [lat])
             lon, lat = xs[0], ys[0]
 
+        dataset_min_lon, dataset_min_lat, dataset_max_lon, dataset_max_lat = (
+            dataset.bounds
+        )
+        # check if latitude is inverted
+        if dataset_min_lat > dataset_max_lat:
+            warnings.warn(
+                "BoundingBox of the dataset is inverted (minLat > maxLat).",
+                UserWarning,
+            )
+
+        dataset_min_lat, dataset_max_lat = (
+            min(dataset_min_lat, dataset_max_lat),
+            max(dataset_min_lat, dataset_max_lat),
+        )
         if not (
-            (dataset.bounds[0] < lon < dataset.bounds[2])
-            and (dataset.bounds[1] < lat < dataset.bounds[3])
+            (dataset_min_lon < lon < dataset_max_lon)
+            and (dataset_min_lat < lat < dataset_max_lat)
         ):
             raise PointOutsideBounds("Point is outside dataset bounds")
 

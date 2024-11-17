@@ -1,3 +1,134 @@
+# 7.2.1 (2024-11-14)
+
+* add official support for floating point values in ColorMap
+* cast data to `uint8` datatype when applying linear colormap
+
+# 7.2.0 (2024-11-05)
+
+* Ensure compatibility between XarrayReader and other Readers by adding `**kwargs` on class methods (https://github.com/cogeotiff/rio-tiler/pull/762)
+
+* add `STACReader.get_asset_list()` method to enable easier customization of the asset listing/validation (https://github.com/cogeotiff/rio-tiler/pull/762)
+
+# 7.1.0 (2024-10-29)
+
+* Add `preview()` and `statistics()` methods to XarrayReader (https://github.com/cogeotiff/rio-tiler/pull/755)
+
+* Add output size (`max_size` | `width`, `height`) options for XarrayReader's `preview()`, `part()` and `feature()` methods (https://github.com/cogeotiff/rio-tiler/pull/755)
+
+* Add half X/Y resolution on bounds before checking the geographic bounds in XarrayReader (https://github.com/cogeotiff/rio-tiler/pull/755)
+
+* Check if the Y bounds are inverted and flip the image on the Y axis in XarrayReader (https://github.com/cogeotiff/rio-tiler/pull/756)
+
+* Add support for 2D arrays in XarrayReader (https://github.com/cogeotiff/rio-tiler/pull/755)
+
+* Cast Xarray `attrs` values in XarrayReader's `info()` response to avoid JSON encoding issues (https://github.com/cogeotiff/rio-tiler/pull/755)
+
+* Refactor XarrayReader's `feature()` method to use the `part` method (https://github.com/cogeotiff/rio-tiler/pull/755)
+
+* Allow `op` parameter for `create_cutline` and `_convert_to_raster_space` functions to better control rasterio's `rowcol` behaviour (author @Martenz, https://github.com/cogeotiff/rio-tiler/pull/759)
+
+# 7.0.1 (2024-10-22)
+
+* Add `CRS_to_urn` method and update internals for `CRS_to_uri` (author @AndrewAnnex, https://github.com/cogeotiff/rio-tiler/pull/752)
+
+# 7.0.0 (2024-10-21)
+
+* Enable dynamic definition of Asset **reader** in `MultiBaseReader` (https://github.com/cogeotiff/rio-tiler/pull/711/, https://github.com/cogeotiff/rio-tiler/pull/728)
+
+* Adding `default_assets` for MultiBaseReader and STACReader (author @mccarthyryanc, https://github.com/cogeotiff/rio-tiler/pull/722)
+
+* Adding `default_bands` for MultiBandReader (https://github.com/cogeotiff/rio-tiler/pull/722)
+
+* Adding support for the STAC `Projection` extension to derive the `bounds`, `crs`, `minzoom` and `maxzoom` properties  **breaking change**
+
+* Refactor internal function and base classes for the `minzoom/maxzoom` calculation **breaking change**
+
+* Adding `transform`, `height` and `width` attributes (outside init) for `SpatialMixin` class
+
+* Moved `_dst_geom_in_tms_crs` from Reader to `SpatialMixin` class **breaking change**
+
+* Removed use of rasterio's `is_tiled` method
+
+* Enable **Alternate** asset's HREF for STAC by using `RIO_TILER_STAC_ALTERNATE_KEY` environment variable
+
+* Adding support for GDAL VRT Connection string for STAC Assets
+
+* Improve type hint definition
+
+* make `ImageData.rescale` and `ImageData.apply_color_formula` to return `self`
+
+* add support for `.json` colormap files
+
+* do no `lowercase` colormap name in `ColorMaps.get` method **breaking change**
+
+    ```python
+    from rio_tiler.colormap import cmap
+
+    # before
+    assert cmap.get("Viridis")
+
+    # now
+    assert cmap.get("Viridis")
+    >> InvalidColorMapName: Invalid colormap name: Viridis
+    ```
+
+* removed `geographic_crs` attribute in `SpatialMixin` class **breaking change**
+
+* removed `geographic_bounds` property in `SpatialMixin` class **breaking change**
+
+* add `get_geographic_bounds(crs: CRS)` method in `SpatialMixin` class
+
+    ```python
+    from rasterio.crs import CRS
+    from rio_tiler.io import Reader
+
+    # before
+    with Reader("cog.tif", geographic_crs=CRS.from_epsg(4326)) as src:
+        bounds = src.geographic_bounds
+
+    # now
+    with Reader("cog.tif") as src:
+        bounds = src.get_geographic_bounds(CRS.from_epsg(4326))
+    ```
+
+* replace `geographic bounds` with dataset bounds in `Reader.info()` method's response **breaking change**
+
+    ```python
+    from rio_tiler.io import Reader
+
+    # before
+    with Reader("cog.tif") as src:
+        assert src.geographic_bounds == src.info().bounds
+
+    # now
+    with Reader("cog.tif") as src:
+        assert src.bounds == src.info().bounds
+    ```
+
+* add `crs: str` property in `Info` model
+
+* remove `minzoom` and `maxzoom` properties in `Info` model **breaking change**
+
+* update `morecantile` dependency to allow `6.x` version
+
+* remove deprecated method and attributes
+
+* `round` xarray dataset's bounds to avoid precision errors when checking for valid geographic bounding box
+
+* fix `bounds` type information
+
+# 6.8.0 (2024-10-23)
+
+* Enable **Alternate** asset's HREF for STAC by using `RIO_TILER_STAC_ALTERNATE_KEY` environment variable [Backported from `7.0`]
+
+* Adding support for GDAL VRT Connection string for STAC Assets [Backported from `7.0`]
+
+# 6.7.0 (2024-09-05)
+
+* raise `MissingCRS` or `InvalidGeographicBounds` errors when Xarray datasets have wrong geographic metadata
+* better error message for `TileOutsideBounds` errors (author @abarciauskas-bgse, https://github.com/cogeotiff/rio-tiler/pull/712)
+* handle of inverted latitude in `reader.point` (author @georgespill, https://github.com/cogeotiff/rio-tiler/pull/716)
+
 # 6.6.1 (2024-05-17)
 
 * fix/support `scale/offset` indexes selection (author @jddeal, https://github.com/cogeotiff/rio-tiler/pull/709)

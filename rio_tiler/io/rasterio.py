@@ -19,7 +19,7 @@ from rasterio.io import DatasetReader, DatasetWriter, MemoryFile
 from rasterio.rio.overview import get_maximum_overview_level
 from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.vrt import WarpedVRT
-from rasterio.warp import calculate_default_transform, transform_geom
+from rasterio.warp import transform_geom
 from rasterio.windows import Window
 from rasterio.windows import from_bounds as window_from_bounds
 
@@ -35,7 +35,12 @@ from rio_tiler.expression import parse_expression
 from rio_tiler.io.base import BaseReader
 from rio_tiler.models import BandStatistics, ImageData, Info, PointData
 from rio_tiler.types import BBox, Indexes, NumType, RIOResampling
-from rio_tiler.utils import _validate_shape_input, has_alpha_band, has_mask_band
+from rio_tiler.utils import (
+    CRS_to_uri,
+    _validate_shape_input,
+    has_alpha_band,
+    has_mask_band,
+)
 
 
 @attr.s
@@ -46,7 +51,6 @@ class Reader(BaseReader):
         input (str): dataset path.
         dataset (rasterio.io.DatasetReader or rasterio.io.DatasetWriter or rasterio.vrt.WarpedVRT, optional): Rasterio dataset.
         tms (morecantile.TileMatrixSet, optional): TileMatrixSet grid definition. Defaults to `WebMercatorQuad`.
-        geographic_crs (rasterio.crs.CRS, optional): CRS to use as geographic coordinate system. Defaults to WGS84.
         colormap (dict, optional): Overwrite internal colormap.
         options (dict, optional): Options to forward to low-level reader methods.
 
@@ -75,16 +79,13 @@ class Reader(BaseReader):
     )
 
     tms: TileMatrixSet = attr.ib(default=WEB_MERCATOR_TMS)
-    geographic_crs: CRS = attr.ib(default=WGS84_CRS)
 
     colormap: Dict = attr.ib(default=None)
 
     options: reader.Options = attr.ib()
 
     # Context Manager to handle rasterio open/close
-    _ctx_stack = attr.ib(init=False, factory=contextlib.ExitStack)
-    _minzoom: int = attr.ib(init=False, default=None)
-    _maxzoom: int = attr.ib(init=False, default=None)
+    _ctx_stack: contextlib.ExitStack = attr.ib(init=False, factory=contextlib.ExitStack)
 
     @options.default
     def _options_default(self):
@@ -121,6 +122,10 @@ class Reader(BaseReader):
         self.bounds = tuple(self.dataset.bounds)
         self.crs = self.dataset.crs
 
+        self.transform = self.dataset.transform
+        self.height = self.dataset.height
+        self.width = self.dataset.width
+
         if self.colormap is None:
             self._get_colormap()
 
@@ -140,85 +145,15 @@ class Reader(BaseReader):
         """Support using with Context Managers."""
         self.close()
 
-    def _dst_geom_in_tms_crs(self):
-        """Return dataset info in TMS projection."""
-        tms_crs = self.tms.rasterio_crs
-        if self.crs != tms_crs:
-            dst_affine, w, h = calculate_default_transform(
-                self.crs,
-                tms_crs,
-                self.dataset.width,
-                self.dataset.height,
-                *self.dataset.bounds,
-            )
-        else:
-            dst_affine = list(self.dataset.transform)
-            w = self.dataset.width
-            h = self.dataset.height
-
-        return dst_affine, w, h
-
-    def get_minzoom(self) -> int:
-        """Define dataset minimum zoom level."""
-        if self._minzoom is None:
-            # We assume the TMS tilesize to be constant over all matrices
-            # ref: https://github.com/OSGeo/gdal/blob/dc38aa64d779ecc45e3cd15b1817b83216cf96b8/gdal/frmts/gtiff/cogdriver.cpp#L274
-            tilesize = self.tms.tileMatrices[0].tileWidth
-
-            try:
-                dst_affine, w, h = self._dst_geom_in_tms_crs()
-
-                # The minzoom is defined by the resolution of the maximum theoretical overview level
-                # We assume `tilesize`` is the smallest overview size
-                overview_level = get_maximum_overview_level(w, h, minsize=tilesize)
-
-                # Get the resolution of the overview
-                resolution = max(abs(dst_affine[0]), abs(dst_affine[4]))
-                ovr_resolution = resolution * (2**overview_level)
-
-                # Find what TMS matrix match the overview resolution
-                self._minzoom = self.tms.zoom_for_res(ovr_resolution)
-
-            except:  # noqa
-                # if we can't get max zoom from the dataset we default to TMS maxzoom
-                warnings.warn(
-                    "Cannot determine minzoom based on dataset information, will default to TMS minzoom.",
-                    UserWarning,
-                )
-                self._minzoom = self.tms.minzoom
-
-        return self._minzoom
-
-    def get_maxzoom(self) -> int:
-        """Define dataset maximum zoom level."""
-        if self._maxzoom is None:
-            try:
-                dst_affine, _, _ = self._dst_geom_in_tms_crs()
-
-                # The maxzoom is defined by finding the minimum difference between
-                # the raster resolution and the zoom level resolution
-                resolution = max(abs(dst_affine[0]), abs(dst_affine[4]))
-                self._maxzoom = self.tms.zoom_for_res(resolution)
-
-            except:  # noqa
-                # if we can't get min/max zoom from the dataset we default to TMS maxzoom
-                warnings.warn(
-                    "Cannot determine maxzoom based on dataset information, will default to TMS maxzoom.",
-                    UserWarning,
-                )
-                self._maxzoom = self.tms.maxzoom
-
-        return self._maxzoom
-
     @property
     def minzoom(self):
         """Return dataset minzoom."""
-        return self.get_minzoom()
+        return self._minzoom
 
     @property
     def maxzoom(self):
         """Return dataset maxzoom."""
-        return self.get_maxzoom()
+        return self._maxzoom
 
     def _get_colormap(self):
         """Retrieve the internal colormap."""
@@ -245,9 +180,8 @@ class Reader(BaseReader):
             nodata_type = "None"
 
         meta = {
-            "bounds": self.geographic_bounds,
-            "minzoom": self.minzoom,
-            "maxzoom": self.maxzoom,
+            "bounds": self.bounds,
+            "crs": CRS_to_uri(self.crs) or self.crs.to_wkt(),
             "band_metadata": [
                 (f"b{ix}", self.dataset.tags(ix)) for ix in self.dataset.indexes
             ],
@@ -343,16 +277,13 @@ class Reader(BaseReader):
         """
         if not self.tile_exists(tile_x, tile_y, tile_z):
             raise TileOutsideBounds(
-                f"Tile {tile_z}/{tile_x}/{tile_y} is outside {self.input} bounds"
+                f"Tile(x={tile_x}, y={tile_y}, z={tile_z}) is outside bounds"
             )
 
-        tile_bounds = self.tms.xy_bounds(Tile(x=tile_x, y=tile_y, z=tile_z))
-        dst_crs = self.tms.rasterio_crs
-
         return self.part(
-            tile_bounds,
-            dst_crs=dst_crs,
-            bounds_crs=dst_crs,
+            tuple(self.tms.xy_bounds(Tile(x=tile_x, y=tile_y, z=tile_z))),
+            dst_crs=self.tms.rasterio_crs,
+            bounds_crs=self.tms.rasterio_crs,
             height=tilesize,
             width=tilesize,
             max_size=None,
@@ -664,8 +595,6 @@ class ImageReader(Reader):
     tms: TileMatrixSet = attr.ib(init=False)
 
     crs: CRS = attr.ib(init=False, default=None)
-    geographic_crs: CRS = attr.ib(init=False, default=None)
-
     transform: Affine = attr.ib(init=False)
 
     def __attrs_post_init__(self):
@@ -676,22 +605,29 @@ class ImageReader(Reader):
 
         height, width = self.dataset.height, self.dataset.width
         self.bounds = (0, height, width, 0)
-        self.transform = transform_from_bounds(*self.bounds, width=width, height=height)
-
         self.tms = LocalTileMatrixSet(width=width, height=height)
-        self._minzoom = self.tms.minzoom
-        self._maxzoom = self.tms.maxzoom
+        self.transform = transform_from_bounds(*self.bounds, width=width, height=height)
+        self.height = height
+        self.width = width
 
         if self.colormap is None:
             self._get_colormap()
 
-        if min(
-            self.dataset.width, self.dataset.height
-        ) > 512 and not self.dataset.overviews(1):
+        if min(width, height) > 512 and not self.dataset.overviews(1):
             warnings.warn(
                 "The dataset has no Overviews. rio-tiler performances might be impacted.",
                 NoOverviewWarning,
             )
+
+    @property
+    def minzoom(self):
+        """Return dataset minzoom."""
+        return self.tms.minzoom
+
+    @property
+    def maxzoom(self):
+        """Return dataset maxzoom."""
+        return self.tms.maxzoom
 
     def tile(  # type: ignore
         self,
@@ -731,10 +667,8 @@ class ImageReader(Reader):
                 f"Tile {tile_z}/{tile_x}/{tile_y} is outside {self.input} bounds"
             )
 
-        tile_bounds = self.tms.xy_bounds(Tile(x=tile_x, y=tile_y, z=tile_z))
-
         return self.part(
-            tile_bounds,
+            tuple(self.tms.xy_bounds(Tile(x=tile_x, y=tile_y, z=tile_z))),
             height=tilesize,
             width=tilesize,
             max_size=None,
@@ -822,8 +756,8 @@ class ImageReader(Reader):
         """Read a pixel value from an Image.
 
         Args:
-            lon (float): X coordinate.
-            lat (float): Y coordinate.
+            x (float): X coordinate.
+            y (float): Y coordinate.
             indexes (sequence of int or int, optional): Band indexes.
             expression (str, optional): rio-tiler expression (e.g. b1/b2+b3).
             unscale (bool, optional): Apply 'scales' and 'offsets' on output data value. Defaults to `False`.

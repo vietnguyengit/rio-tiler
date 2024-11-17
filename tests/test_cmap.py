@@ -1,12 +1,14 @@
 """tests rio_tiler colormaps"""
 
+import json
+import os
+import pathlib
 from copy import deepcopy
 
 import numpy
 import pytest
 
 from rio_tiler import colormap
-from rio_tiler.colormap import DEFAULT_CMAPS_FILES
 from rio_tiler.errors import (
     ColorMapAlreadyRegistered,
     InvalidColorFormat,
@@ -14,20 +16,30 @@ from rio_tiler.errors import (
     InvalidFormat,
 )
 
+try:
+    from importlib.resources import as_file
+except ImportError:
+    # Try backported to PY<39 `importlib_resources`.
+    from importlib_resources import as_file  # type: ignore
+
+PREFIX = os.path.join(os.path.dirname(__file__), "fixtures", "cmap")
+
 colormap_number = 211
 
+with as_file(colormap._RIO_CMAP_DIR) as p:
+    DEFAULT_CMAPS_FILES = {
+        f.stem: f for f in p.glob("**/*") if f.suffix in {".npy", ".json"}
+    }
 
-def test_get_cmaplist(monkeypatch):
+
+def test_get_cmaplist():
     """Should work as expected return all rio-tiler colormaps."""
-    monkeypatch.delenv("COLORMAP_DIRECTORY", raising=False)
     assert len(DEFAULT_CMAPS_FILES) == colormap_number
 
 
-def test_cmapObject(monkeypatch):
+def test_cmapObject():
     """Test Colormap object handler."""
-    monkeypatch.delenv("COLORMAP_DIRECTORY", raising=False)
-
-    cmap = colormap.cmap
+    cmap = colormap.ColorMaps(data=DEFAULT_CMAPS_FILES)
     assert len(cmap.list()) == colormap_number
 
     with pytest.raises(InvalidColorMapName):
@@ -54,17 +66,45 @@ def test_cmapObject(monkeypatch):
     assert new_cmap.get("empty")
 
 
+def test_cmap_json():
+    """Test Colormap with JSON files."""
+    cmap = colormap.ColorMaps(data=DEFAULT_CMAPS_FILES)
+    assert len(cmap.list()) == colormap_number
+
+    new_cmap = cmap.register(
+        {
+            "nlcd": pathlib.Path(PREFIX) / "nlcd.json",
+            "sequence": pathlib.Path(PREFIX) / "sequence.json",
+            "bad": pathlib.Path(PREFIX) / "bad.json",
+        }
+    )
+    assert len(new_cmap.list()) == colormap_number + 3
+    nlcd = new_cmap.get("nlcd")
+    assert isinstance(nlcd, dict)
+    assert nlcd[11] == (72, 109, 162, 255)
+
+    seq = new_cmap.get("sequence")
+    assert isinstance(seq, list)
+    assert seq[0][0] == (1, 2)
+    assert seq[0][1] == (255, 0, 0, 255)
+
+    with pytest.raises((json.JSONDecodeError, ValueError)):
+        new_cmap.get("bad")
+
+
 def test_valid_cmaps():
     """Make sure all colormaps have 4 values and 256 items."""
-    for c in colormap.cmap.list():
-        cm = colormap.cmap.get(c)
+    cmap = colormap.ColorMaps(data=DEFAULT_CMAPS_FILES)
+    for c in cmap.list():
+        cm = cmap.get(c)
         assert len(cm[0]) == 4
         assert len(cm.items()) == 256
 
 
 def test_update_alpha():
     """Should update the alpha channel."""
-    cm = colormap.cmap.get("viridis")
+    cmap = colormap.ColorMaps(data=DEFAULT_CMAPS_FILES)
+    cm = cmap.get("viridis")
     idx = 1
     assert cm[idx][-1] == 255
     colormap._update_alpha(cm, idx)
@@ -83,7 +123,8 @@ def test_update_alpha():
 
 def test_remove_value():
     """Should remove cmap value."""
-    cm = colormap.cmap.get("viridis")
+    cmap = colormap.ColorMaps(data=DEFAULT_CMAPS_FILES)
+    cm = cmap.get("viridis")
     idx = 1
     colormap._remove_value(cm, idx)
     assert not cm.get(1)
@@ -96,7 +137,8 @@ def test_remove_value():
 
 def test_update_cmap():
     """Should update the colormap."""
-    cm = colormap.cmap.get("viridis")
+    cmap = colormap.ColorMaps(data=DEFAULT_CMAPS_FILES)
+    cm = cmap.get("viridis")
     val = {1: (0, 0, 0, 0), 2: (255, 255, 255, 255)}
     colormap._update_cmap(cm, val)
     assert cm[1] == (0, 0, 0, 0)
@@ -178,6 +220,7 @@ def test_apply_discrete_cmap():
     assert colormap.apply_cmap(data, cm)
 
     # Test with negative value
+    data = data.astype("int16")
     cm = {-100: (255, 255, 255, 255), 1: (0, 0, 0, 255), 256: (255, 255, 255, 255)}
     data[0, 5:, 5:] = -100
     d, m = colormap.apply_cmap(data, cm)
@@ -258,6 +301,8 @@ def test_parse_color_bad():
 
 def test_discrete_float():
     """test for titiler issue 738."""
+
+    # make sure we apply discrete colormap when we have less than 256 cmap entries
     cm = {
         0: (0, 255, 255, 255),
         1: (83, 151, 145, 255),
@@ -282,3 +327,20 @@ def test_discrete_float():
     dd, mm = colormap.apply_discrete_cmap(data.copy(), cm)
     assert d.dtype == numpy.uint8
     assert m.dtype == numpy.uint8
+    numpy.testing.assert_array_equal(d, dd)
+    numpy.testing.assert_array_equal(m, mm)
+
+    # make we allow float keys in discrete colormap
+    cm = {
+        0.5: (0, 255, 255, 255),
+        1.5: (83, 151, 145, 255),
+        2.5: (87, 194, 23, 255),
+    }
+
+    data = numpy.random.choice([0.5, 2.5], 256 * 256).reshape(1, 256, 256)
+    d, m = colormap.apply_cmap(data.copy(), cm)
+    dd, mm = colormap.apply_discrete_cmap(data.copy(), cm)
+    assert d.dtype == numpy.uint8
+    assert m.dtype == numpy.uint8
+    numpy.testing.assert_array_equal(d, dd)
+    numpy.testing.assert_array_equal(m, mm)

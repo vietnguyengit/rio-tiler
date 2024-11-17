@@ -3,7 +3,17 @@
 import math
 import warnings
 from io import BytesIO
-from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy
 import rasterio
@@ -305,6 +315,7 @@ def get_vrt_transform(
         tuple: VRT transform (affine.Affine), width (int) and height (int)
 
     """
+    # 1. Get the Dataset Resolution in the output crs
     if src_dst.crs != dst_crs:
         src_width = src_dst.width
         src_height = src_dst.height
@@ -358,6 +369,7 @@ def get_vrt_transform(
     else:
         dst_transform = src_dst.transform
 
+    # 2. adjust output bounds if needed
     # If bounds window is aligned with the dataset internal tile we align the bounds with the pixels.
     # This is to limit the number of internal block fetched.
     if _requested_tile_aligned_with_internal_tile(src_dst, bounds, bounds_crs=dst_crs):
@@ -384,6 +396,7 @@ def get_vrt_transform(
 
     w, s, e, n = bounds
 
+    # 3. Calculate the VRT Height/Width
     # When no output size (resolution) - Use Dataset Resolution
     # NOTE: When we don't `fix` the output width/height, we're using the reprojected dataset resolution
     # to calculate what is the size/transform of the VRT
@@ -397,18 +410,13 @@ def get_vrt_transform(
         output_transform = from_bounds(w, s, e, n, width, height)
 
         # NOTE: Here we check if the Output Resolution is higher thant the dataset resolution (OverZoom)
-        # When not overzooming we don't want to use the output Width/Height to calculate the transform
+        # When not over-zooming we don't want to use the output Width/Height to calculate the transform
         # See issues https://github.com/cogeotiff/rio-tiler/pull/648
-        w_res = (
-            output_transform.a
-            if abs(output_transform.a) < abs(dst_transform.a)
-            else dst_transform.a
-        )
-        h_res = (
-            output_transform.e
-            if abs(output_transform.e) < abs(dst_transform.e)
-            else dst_transform.e
-        )
+        if abs(dst_transform.a) > abs(output_transform.a):
+            w_res = output_transform.a
+
+        if abs(dst_transform.e) > abs(output_transform.e):
+            h_res = output_transform.e
 
     vrt_width = max(1, round((e - w) / w_res))
     vrt_height = max(1, round((s - n) / h_res))
@@ -477,7 +485,7 @@ def _requested_tile_aligned_with_internal_tile(
     bounds_crs: CRS = WEB_MERCATOR_CRS,
 ) -> bool:
     """Check if tile is aligned with internal tiles."""
-    if not src_dst.is_tiled:
+    if src_dst.block_shapes and src_dst.block_shapes[0][1] == src_dst.width:
         return False
 
     if src_dst.crs != bounds_crs:
@@ -644,12 +652,15 @@ def pansharpening_brovey(
 def _convert_to_raster_space(
     src_dst: Union[DatasetReader, DatasetWriter, WarpedVRT],
     poly_coordinates: List,
+    op: Optional[Callable[[float], Any]] = None,
 ) -> List[str]:
+    # NOTE: we could remove this once we have rasterio >= 1.4.2
+    op = op or numpy.floor
     polygons = []
     for point in poly_coordinates:
         xs, ys = zip(*coords(point))
-        src_y, src_x = rowcol(src_dst.transform, xs, ys)
-        polygon = ", ".join([f"{x} {y}" for x, y in list(zip(src_x, src_y))])
+        src_y, src_x = rowcol(src_dst.transform, xs, ys, op=op)
+        polygon = ", ".join([f"{int(x)} {int(y)}" for x, y in list(zip(src_x, src_y))])
         polygons.append(f"({polygon})")
 
     return polygons
@@ -659,6 +670,7 @@ def create_cutline(
     src_dst: Union[DatasetReader, DatasetWriter, WarpedVRT],
     geometry: Dict,
     geometry_crs: CRS = None,
+    op: Optional[Callable[[float], Any]] = None,
 ) -> str:
     """
     Create WKT Polygon Cutline for GDALWarpOptions.
@@ -680,13 +692,13 @@ def create_cutline(
         geometry = transform_geom(geometry_crs, src_dst.crs, geometry)
 
     if geom_type == "Polygon":
-        polys = ",".join(_convert_to_raster_space(src_dst, geometry["coordinates"]))
+        polys = ",".join(_convert_to_raster_space(src_dst, geometry["coordinates"], op))
         wkt = f"POLYGON ({polys})"
 
     elif geom_type == "MultiPolygon":
         multi_polys = []
         for poly in geometry["coordinates"]:
-            polys = ",".join(_convert_to_raster_space(src_dst, poly))
+            polys = ",".join(_convert_to_raster_space(src_dst, poly, op))
             multi_polys.append(f"({polys})")
         str_multipoly = ",".join(multi_polys)
         wkt = f"MULTIPOLYGON ({str_multipoly})"
@@ -783,3 +795,51 @@ def _validate_shape_input(shape: Dict) -> Dict:
         raise RioTilerError("Invalid geometry")
 
     return shape
+
+
+def cast_to_sequence(val: Optional[Any] = None) -> Sequence:
+    """Cast input to sequence if not Tuple of List."""
+    if val is not None and not isinstance(val, (list, tuple)):
+        val = (val,)
+
+    return val
+
+
+def _CRS_authority_info(crs: CRS) -> Optional[Tuple[str, str, str]]:
+    """Convert CRS to URI.
+
+    Code adapted from https://github.com/developmentseed/morecantile/blob/1829fe12408e4a1feee7493308f3f02257ef4caf/morecantile/models.py#L148-L161
+    """
+    # attempt to grab the authority, version, and code from the CRS
+    if authority_code := crs.to_authority(confidence_threshold=70):
+        version = "0"
+        authority, code = authority_code
+        # if we have a version number in the authority, split it out
+        if "_" in authority:
+            authority, version = authority.split("_")
+
+        return authority, version, code
+
+    return None
+
+
+def CRS_to_uri(crs: CRS) -> Optional[str]:
+    """Convert CRS to URI."""
+    if info := _CRS_authority_info(crs):
+        authority, version, code = info
+
+        return f"http://www.opengis.net/def/crs/{authority}/{version}/{code}"
+
+    return None
+
+
+def CRS_to_urn(crs: CRS) -> Optional[str]:
+    """Convert CRS to URN."""
+    if info := _CRS_authority_info(crs):
+        authority, version, code = info
+        if version == "0":
+            version = ""
+
+        return f"urn:ogc:def:crs:{authority}:{version}:{code}"
+
+    return None

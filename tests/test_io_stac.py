@@ -2,14 +2,21 @@
 
 import json
 import os
+import sys
+from typing import Dict, List, Set, Tuple, Type
 from unittest.mock import patch
 
 import attr
+import morecantile
 import numpy
 import pytest
 import rasterio
+import xarray
+from morecantile import TileMatrixSet
 from rasterio._env import get_gdal_config
+from rasterio.crs import CRS
 
+from rio_tiler.constants import WEB_MERCATOR_TMS
 from rio_tiler.errors import (
     AssetAsBandError,
     ExpressionMixingWarning,
@@ -18,15 +25,21 @@ from rio_tiler.errors import (
     MissingAssets,
     TileOutsideBounds,
 )
-from rio_tiler.io import Reader, STACReader
+from rio_tiler.io import BaseReader, Reader, STACReader, XarrayReader
+from rio_tiler.io.stac import DEFAULT_VALID_TYPE
 from rio_tiler.models import BandStatistics
+from rio_tiler.types import AssetInfo
 
 PREFIX = os.path.join(os.path.dirname(__file__), "fixtures")
 STAC_PATH = os.path.join(PREFIX, "stac.json")
+STAC_PATH_PROJ = os.path.join(PREFIX, "stac_proj.json")
 STAC_REL_PATH = os.path.join(PREFIX, "stac_relative.json")
 STAC_GDAL_PATH = os.path.join(PREFIX, "stac_headers.json")
 STAC_RASTER_PATH = os.path.join(PREFIX, "stac_raster.json")
 STAC_WRONGSTATS_PATH = os.path.join(PREFIX, "stac_wrong_stats.json")
+STAC_ALTERNATE_PATH = os.path.join(PREFIX, "stac_alternate.json")
+STAC_GRIB_PATH = os.path.join(PREFIX, "stac_grib.json")
+STAC_NETCDF_PATH = os.path.join(PREFIX, "stac_netcdf.json")
 
 with open(STAC_PATH) as f:
     item = json.loads(f.read())
@@ -52,6 +65,16 @@ def test_fetch_stac(httpx, s3_get):
         assert stac.assets == ["red", "green", "blue", "lowres"]
     httpx.assert_not_called()
     s3_get.assert_not_called()
+
+    with STACReader(STAC_PATH, tms=morecantile.tms.get("GNOSISGlobalGrid")) as stac:
+        assert stac.minzoom == 0
+        assert stac.maxzoom == 28
+        assert stac.bounds
+
+    with STACReader(STAC_PATH, minzoom=4, maxzoom=8) as stac:
+        assert stac.minzoom == 4
+        assert stac.maxzoom == 8
+        assert stac.bounds
 
     # Load from dict
     with STACReader(None, item=item) as stac:
@@ -126,6 +149,22 @@ def test_fetch_stac(httpx, s3_get):
     httpx.assert_not_called()
     s3_get.assert_called_once()
     assert s3_get.call_args[0] == ("somewhereovertherainbow.io", "mystac.json")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 9), reason="requires python3.9 or higher")
+def test_projection_extension():
+    """Test STAC with the projection extension."""
+    with STACReader(STAC_PATH_PROJ) as stac:
+        assert stac.minzoom == 6
+        assert stac.maxzoom == 7
+        assert stac.bounds
+        assert stac.crs == CRS.from_epsg(32617)
+
+    with STACReader(STAC_PATH_PROJ, minzoom=4, maxzoom=8) as stac:
+        assert stac.minzoom == 4
+        assert stac.maxzoom == 8
+        assert stac.bounds
+        assert stac.crs == CRS.from_epsg(32617)
 
 
 @patch("rio_tiler.io.rasterio.rasterio")
@@ -434,7 +473,7 @@ def test_statistics_valid(rio):
 
         stats = stac.statistics(assets=("green", "red"), hist_options={"bins": 20})
         assert len(stats) == 2
-        assert len(stats["green"]["b1"]["histogram"][0]) == 20
+        assert len(stats["green"]["b1"].histogram[0]) == 20
 
         # Check that asset_expression is passed
         stats = stac.statistics(
@@ -481,8 +520,8 @@ def test_merged_statistics_valid(rio):
 
         stats = stac.merged_statistics(assets=("green", "red"), hist_options={"bins": 20})
         assert len(stats) == 2
-        assert len(stats["green_b1"]["histogram"][0]) == 20
-        assert len(stats["red_b1"]["histogram"][0]) == 20
+        assert len(stats["green_b1"].histogram[0]) == 20
+        assert len(stats["red_b1"].histogram[0]) == 20
 
         stats = stac.merged_statistics(expression="green_b1*2;green_b1;red_b1+100")
         assert isinstance(stats["green_b1*2"], BandStatistics)
@@ -890,3 +929,184 @@ def test_expression_with_wrong_stac_stats(rio):
                 expression="where((wrongstat>0.5),1,0)",
                 asset_as_band=True,
             )
+
+
+@patch("rio_tiler.io.rasterio.rasterio")
+def test_default_assets(rio):
+    """Should raise or return tiles."""
+    rio.open = mock_rasterio_open
+
+    bbox = (-80.477, 32.7988, -79.737, 33.4453)
+
+    feat = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [-80.013427734375, 33.03169299978312],
+                    [-80.3045654296875, 32.588477769459146],
+                    [-80.05462646484375, 32.42865847084369],
+                    [-79.45037841796875, 32.6093028087336],
+                    [-79.47235107421875, 33.43602551072033],
+                    [-79.89532470703125, 33.47956309444182],
+                    [-80.1068115234375, 33.37870592138779],
+                    [-80.30181884765625, 33.27084277265288],
+                    [-80.0628662109375, 33.146750228776455],
+                    [-80.013427734375, 33.03169299978312],
+                ]
+            ],
+        },
+    }
+
+    with STACReader(STAC_PATH, default_assets=["green"]) as stac:
+        with pytest.warns(UserWarning):
+            img = stac.tile(71, 102, 8)
+            assert img.data.shape == (1, 256, 256)
+            assert img.mask.shape == (256, 256)
+            assert img.band_names == ["green_b1"]
+
+        with pytest.warns(UserWarning):
+            pt = stac.point(-80.477, 33.4453)
+            assert len(pt.data) == 1
+            assert pt.band_names == ["green_b1"]
+
+        with pytest.warns(UserWarning):
+            img = stac.preview()
+            assert img.data.shape == (1, 259, 255)
+            assert img.mask.shape == (259, 255)
+            assert img.band_names == ["green_b1"]
+
+        with pytest.warns(UserWarning):
+            img = stac.part(bbox)
+            assert img.data.shape == (1, 73, 83)
+            assert img.mask.shape == (73, 83)
+            assert img.band_names == ["green_b1"]
+
+        with pytest.warns(UserWarning):
+            img = stac.feature(feat)
+            assert img.data.shape == (1, 118, 96)
+            assert img.mask.shape == (118, 96)
+            assert img.band_names == ["green_b1"]
+
+
+def test_netcdf_reader():
+    """Should use the correct reader depending on the media type."""
+
+    @attr.s
+    class NetCDFReader(XarrayReader):
+        """Reader: Open NetCDF file and access DataArray."""
+
+        src_path: str = attr.ib()
+        variable: str = attr.ib()
+
+        tms: TileMatrixSet = attr.ib(default=WEB_MERCATOR_TMS)
+
+        ds: xarray.Dataset = attr.ib(init=False)
+        input: xarray.DataArray = attr.ib(init=False)
+
+        _dims: List = attr.ib(init=False, factory=list)
+
+        def __attrs_post_init__(self):
+            """Set bounds and CRS."""
+            self.ds = xarray.open_dataset(self.src_path, decode_coords="all")
+            da = self.ds[self.variable]
+
+            # Make sure we have a valid CRS
+            crs = da.rio.crs or "epsg:4326"
+            da = da.rio.write_crs(crs)
+
+            if "time" in da.dims:
+                da = da.isel(time=0)
+
+            self.input = da
+
+            super().__attrs_post_init__()
+
+    valid_types = {
+        "image/tiff; application=geotiff",
+        "application/x-netcdf",
+    }
+
+    @attr.s
+    class CustomSTACReader(STACReader):
+        include_asset_types: Set[str] = attr.ib(default=valid_types)
+
+        def _get_reader(self, asset_info: AssetInfo) -> Tuple[Type[BaseReader], Dict]:
+            """Get Asset Reader."""
+            asset_type = asset_info.get("media_type", None)
+            if asset_type and asset_type in [
+                "application/x-netcdf",
+            ]:
+                return NetCDFReader, {}
+
+            return Reader, {}
+
+    with CustomSTACReader(STAC_NETCDF_PATH) as stac:
+        assert stac.assets == ["geotiff", "netcdf"]
+        info = stac._get_asset_info("netcdf")
+        assert info["media_type"] == "application/x-netcdf"
+        assert stac._get_reader(info) == (NetCDFReader, {})
+
+        info = stac._get_asset_info("geotiff")
+        assert info["media_type"] == "image/tiff; application=geotiff"
+        assert stac._get_reader(info) == (Reader, {})
+
+    with CustomSTACReader(
+        STAC_NETCDF_PATH, reader_options={"variable": "dataset"}
+    ) as stac:
+        info = stac.info(assets=["netcdf"])
+        assert info["netcdf"].crs
+
+        img = stac.preview(assets=["netcdf"])
+        assert img.band_names == ["netcdf_value"]
+
+
+@patch("rio_tiler.io.stac.STAC_ALTERNATE_KEY", "s3")
+def test_alternate_assets():
+    """Should return the alternate key"""
+    with STACReader(STAC_ALTERNATE_PATH) as stac:
+        assert stac._get_asset_info("red")["url"].startswith("s3://")
+        # fall back to href when alternate doesn't exist
+        assert stac._get_asset_info("blue")["url"].startswith("http://")
+
+
+def test_vrt_string_assets():
+    """Should work with VRT connection string"""
+    VALID_TYPE = {
+        *DEFAULT_VALID_TYPE,
+        "application/wmo-GRIB2",
+    }
+
+    with STACReader(STAC_GRIB_PATH, include_asset_types=VALID_TYPE) as stac:
+        assert stac.assets == ["asset"]
+        info = stac._get_asset_info("asset")
+        assert info["url"]
+
+        info_vrt = stac._get_asset_info("vrt://asset")
+        # without any option there is no need to use the vrt prefix
+        assert info["url"] == info_vrt["url"]
+
+        info_vrt = stac._get_asset_info("vrt://asset?bands=1")
+        assert not info["url"] == info_vrt["url"]
+        assert info_vrt["url"].startswith("vrt://") and info_vrt["url"].endswith(
+            "?bands=1"
+        )
+
+        with pytest.raises(InvalidAssetName):
+            stac._get_asset_info("vrt://somthing?bands=1")
+
+        with pytest.raises(InvalidAssetName):
+            stac._get_asset_info("vrt://?bands=1")
+
+        info = stac.info(assets="vrt://asset?bands=1")
+        assert info["vrt://asset?bands=1"]
+        assert len(info["vrt://asset?bands=1"].band_metadata) == 1
+
+        info = stac.info(assets="vrt://asset?bands=1,2")
+        assert info["vrt://asset?bands=1,2"]
+        assert len(info["vrt://asset?bands=1,2"].band_metadata) == 2
+
+        img = stac.preview(assets="vrt://asset?bands=1")
+        assert img.count == 1
